@@ -1,0 +1,51 @@
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <a href="/admin">
+      <svg class="sidebar-mark" width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="1" y="1" width="20" height="20" rx="5" stroke="#2fa89f" stroke-width="2"/>
+        <rect x="9" y="9" width="8" height="8" rx="2" fill="#2fa89f"/>
+      </svg>
+      <span>Admin Panel</span>
+    </a>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="sidebar-group">
+      <div class="sidebar-group-label">Overview</div>
+      <ul>
+        <li><a href="/admin" class="{% if active_nav == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+      </ul>
+    </div>
+
+    {% if current_user and (current_user.has_permission("users.manage") or current_user.has_permission("files.manage")) %}
+    <div class="sidebar-group">
+      <div class="sidebar-group-label">Manage</div>
+      <ul>
+        {% if current_user.has_permission("users.manage") %}
+        <li><a href="/admin/users" class="{% if active_nav == 'users' %}active{% endif %}">Users</a></li>
+        {% endif %}
+        {% if current_user.has_permission("files.manage") %}
+        <li><a href="/admin/files" class="{% if active_nav == 'files' %}active{% endif %}">Files</a></li>
+        {% endif %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <div class="sidebar-group">
+      <div class="sidebar-group-label">System</div>
+      <ul>
+        <li><a href="/admin/settings" class="{% if active_nav == 'settings' %}active{% endif %}">Settings</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <div class="sidebar-user">
+    {% if current_user %}
+      <span class="sidebar-user-name">{{ current_user.name|default("Account") }}</span>
+      <a href="/logout">Log out</a>
+    {% else %}
+      <span class="sidebar-user-name">Not signed in</span>
+      <a href="/login">Log in</a>
+    {% endif %}
+  </div>
+</aside>

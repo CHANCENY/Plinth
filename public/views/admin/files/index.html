@@ -1,0 +1,46 @@
+{% extends "admin" %}
+{% block title %}Files{% endblock %}
+{% block page_title %}Files{% endblock %}
+
+{% block content %}
+<div class="table-card">
+  {% if files|length == 0 %}
+    <div class="empty-state">
+      <p>No files yet.</p>
+    </div>
+  {% else %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Filename</th>
+        <th>Type</th>
+        <th>Size</th>
+        <th>Status</th>
+        <th>Uploaded</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for file in files %}
+      <tr>
+        <td class="cell-mono">{{ file.fid }}</td>
+        <td>{{ file.filename }}</td>
+        <td class="cell-muted">{{ file.filemime|default("-") }}</td>
+        <td class="cell-mono">{{ file.filesize }} B</td>
+        <td><span class="status-pill status-{{ "active" if file.status == "permanent" else "pending" }}">{{ file.status }}</span></td>
+        <td class="cell-mono">{{ file.created_at }}</td>
+        <td class="cell-actions">
+          <a href="/admin/files/{{ file.fid }}/edit">Edit</a>
+          <form class="delete-form" method="post" action="/admin/files/{{ file.fid }}/delete"
+                onsubmit="return confirm('Delete {{ file.filename }}? This cannot be undone from here.');">
+            <button type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

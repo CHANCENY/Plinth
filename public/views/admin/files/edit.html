@@ -1,0 +1,27 @@
+{% extends "admin" %}
+{% block title %}Edit file{% endblock %}
+{% block page_title %}Edit file{% endblock %}
+
+{% block content %}
+<div class="form-card">
+  <form method="post" action="/admin/files/{{ file.fid }}/edit">
+    <div class="field">
+      <label for="filename">Filename</label>
+      <input type="text" id="filename" name="filename" value="{{ old.filename|default(file.filename) }}" required autofocus>
+      {% if errors.filename %}<div class="field-error">{{ errors.filename[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        <option value="temporary" {% if (old.status|default(file.status)) == "temporary" %}selected{% endif %}>Temporary</option>
+        <option value="permanent" {% if (old.status|default(file.status)) == "permanent" %}selected{% endif %}>Permanent</option>
+      </select>
+      {% if errors.status %}<div class="field-error">{{ errors.status[0] }}</div>{% endif %}
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save changes</button>
+      <a href="/admin/files" class="btn-cancel">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

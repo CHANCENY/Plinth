@@ -1,0 +1,16 @@
+# Always needed - loads DB_DRIVER and credentials from .env
+python-dotenv>=1.0.0
+
+# Uncomment whichever driver(s) you actually use (matches DB_DRIVER in .env).
+# sqlite needs nothing extra - it's built into Python's standard library.
+
+# mysql
+mysql-connector-python>=8.0.0
+
+# postgres
+# psycopg2-binary>=2.9.0
+
+# mongodb
+# pymongo>=4.0.0
+
+Jinja2>=3.1.0
