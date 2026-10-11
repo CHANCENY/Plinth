@@ -1,0 +1,48 @@
+"""
+Role
+------
+A user role, e.g. "blog.editor" - declared by an app in its permissions.py and synced into
+this table by `python console.py apps:discover`. The permissions a role grants live in
+role_permissions (see RolePermission).
+
+A role flagged is_superuser (the built-in administrator) implicitly holds every permission;
+users given that role are stored with permissions ["*"].
+
+When a user is created, the permissions of their role are collected and saved into
+users.permissions_raw as JSON - see User.save() and Role.permissions_for() below.
+"""
+
+from typing import List
+
+from core.database.fields import AutoField, BooleanField, CharField, IntegerField, TimestampField
+from core.models.BaseModel import BaseModel
+from core.models.RolePermission import RolePermission
+
+
+class Role(BaseModel):
+    table_name = "roles"
+
+    # The two roles the framework itself relies on (defined by the built-in admin app,
+    # public/apps/admin/permissions.py): who the first registered account becomes, and
+    # what everyone else gets by default.
+    ADMIN_KEY = "admin.administrator"
+    DEFAULT_KEY = "admin.member"
+
+    id = AutoField()
+    role_key = CharField(max_length=100, unique=True)  # NOT `key` - KEY is a reserved word in MySQL
+    label = CharField(max_length=255)
+    description = CharField(max_length=500, null=True)
+    app = CharField(max_length=100)
+    is_superuser = BooleanField(default=False)
+    weight = IntegerField(default=0)  # display order = order apps declared them
+    created_at = TimestampField(auto_now_add=True)
+    updated_at = TimestampField(auto_now_add=True, auto_now=True)
+
+    @classmethod
+    def permissions_for(cls, db_connection, role_key: str) -> List[str]:
+        """Permission keys a role grants - ["*"] for a superuser role, otherwise its matrix column."""
+        role = cls.objects(db_connection).filter(role_key=role_key).first()
+        if (role is not None and role.is_superuser) or (role is None and role_key == cls.ADMIN_KEY):
+            return ["*"]
+        rows = RolePermission.objects(db_connection).filter(role_key=role_key)
+        return sorted({row.permission_key for row in rows})

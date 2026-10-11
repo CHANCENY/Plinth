@@ -1,0 +1,36 @@
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <a href="/admin">
+      <svg class="sidebar-mark" width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="1" y="1" width="20" height="20" rx="5" stroke="#2fa89f" stroke-width="2"/>
+        <rect x="9" y="9" width="8" height="8" rx="2" fill="#2fa89f"/>
+      </svg>
+      <span>Admin Panel</span>
+    </a>
+  </div>
+
+  {# Built from the menus.py of every registered app, filtered to what this user may see
+     (core/services/MenuService.py). `dashboard_menu` is supplied by ControllerBase.view(). #}
+  <nav class="sidebar-nav">
+    {% for group in (dashboard_menu() if dashboard_menu is defined else []) %}
+    <div class="sidebar-group">
+      <div class="sidebar-group-label">{{ group.label }}</div>
+      <ul>
+        {% for link in group.links %}
+        <li><a href="{{ link.path }}" class="{% if link.active %}active{% endif %}">{{ link.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </nav>
+
+  <div class="sidebar-user">
+    {% if current_user %}
+      <span class="sidebar-user-name">{{ current_user.name|default("Account") }}</span>
+      <a href="/logout">Log out</a>
+    {% else %}
+      <span class="sidebar-user-name">Not signed in</span>
+      <a href="/login">Log in</a>
+    {% endif %}
+  </div>
+</aside>

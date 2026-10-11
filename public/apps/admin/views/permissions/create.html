@@ -1,0 +1,40 @@
+{% extends "admin" %}
+{% block title %}Add permission{% endblock %}
+{% block page_title %}Add permission{% endblock %}
+
+{% block content %}
+<div class="form-card">
+  <form method="post" action="/admin/permissions/new">
+    <div class="field">
+      <label for="app">App</label>
+      <select id="app" name="app" required>
+        {% for app in apps %}
+        <option value="{{ app }}" {% if old.app == app %}selected{% endif %}>{{ app }}</option>
+        {% endfor %}
+      </select>
+      <div class="field-hint">Permission keys always start with the app's name.</div>
+      {% if errors.app %}<div class="field-error">{{ errors.app[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="key">Key</label>
+      <input type="text" id="key" name="key" value="{{ old.key|default('') }}" placeholder="reports.export" required autofocus>
+      <div class="field-hint">Saved as <code>&lt;app&gt;.&lt;key&gt;</code>. Lowercase letters, digits, <code>_</code> and <code>.</code> only.</div>
+      {% if errors.key %}<div class="field-error">{{ errors.key[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="label">Label</label>
+      <input type="text" id="label" name="label" value="{{ old.label|default('') }}" placeholder="Export reports" required>
+      {% if errors.label %}<div class="field-error">{{ errors.label[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="description">Description <span class="cell-muted">(optional)</span></label>
+      <textarea id="description" name="description" rows="3">{{ old.description|default('') }}</textarea>
+      {% if errors.description %}<div class="field-error">{{ errors.description[0] }}</div>{% endif %}
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Add permission</button>
+      <a href="/admin/permissions" class="btn-cancel">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

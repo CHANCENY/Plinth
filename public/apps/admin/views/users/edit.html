@@ -1,0 +1,93 @@
+{% extends "admin" %}
+{% block title %}Edit user{% endblock %}
+{% block page_title %}Edit user{% endblock %}
+
+{% block content %}
+<div class="form-card{% if can_assign %} wide{% endif %}">
+  <form method="post" action="/admin/users/{{ user.uid }}/edit">
+    <div class="field">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" value="{{ old.name|default(user.name) }}" required autofocus>
+      {% if errors.name %}<div class="field-error">{{ errors.name[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" value="{{ old.email|default(user.email) }}" required>
+      {% if errors.email %}<div class="field-error">{{ errors.email[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="password">New password</label>
+      <input type="password" id="password" name="password">
+      <div class="field-hint">Leave blank to keep their current password.</div>
+      {% if errors.password %}<div class="field-error">{{ errors.password[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        {% for option in ["active", "pending", "suspended", "blocked"] %}
+        <option value="{{ option }}" {% if (old.status|default(user.status)) == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if can_assign %}
+    {% if roles|length > 0 %}
+    <div class="field">
+      <label for="role">Role</label>
+      <select id="role" name="role">
+        {% for role in roles %}
+        <option value="{{ role.role_key }}" {% if (old.role|default(user.role)) == role.role_key %}selected{% endif %}>{{ role.label }}</option>
+        {% endfor %}
+      </select>
+      <div class="field-hint">Choosing a role ticks the permissions it grants below - the boxes are what gets saved.</div>
+      {% if errors.role %}<div class="field-error">{{ errors.role[0] }}</div>{% endif %}
+    </div>
+    {% endif %}
+
+    <fieldset class="perm-fieldset">
+      <legend>Permissions</legend>
+      <label class="check-inline perm-all">
+        <input type="checkbox" id="permissions_all" name="permissions_all" value="1" {% if all_permissions %}checked{% endif %}>
+        <span>Administrator - every permission <span class="perm-key">*</span></span>
+      </label>
+      {% for group in groups %}
+      <div class="perm-group">
+        <div class="perm-group-name">{{ group.app }}</div>
+        {% for permission in group.permissions %}
+        <label class="check-inline">
+          <input type="checkbox" class="perm-box" name="permissions" value="{{ permission.permission_key }}" {% if permission.permission_key in selected_permissions %}checked{% endif %}>
+          <span>{{ permission.label }} <span class="perm-key">{{ permission.permission_key }}</span></span>
+        </label>
+        {% endfor %}
+      </div>
+      {% endfor %}
+      {% if groups|length == 0 %}<div class="field-hint">No permissions found yet - run <code>python console.py apps:discover</code>.</div>{% endif %}
+      {% if errors.permissions %}<div class="field-error">{{ errors.permissions[0] }}</div>{% endif %}
+    </fieldset>
+    <script>
+      (function () {
+        var defaults = {{ role_defaults|tojson }};
+        var select = document.getElementById('role');
+        var all = document.getElementById('permissions_all');
+        var boxes = document.querySelectorAll('.perm-box');
+        function syncAll() { boxes.forEach(function (b) { b.disabled = all.checked; }); }
+        all.addEventListener('change', syncAll);
+        syncAll();
+        if (select) {
+          select.addEventListener('change', function () {
+            var perms = defaults[select.value] || [];
+            var everything = perms.indexOf('*') !== -1;
+            all.checked = everything;
+            boxes.forEach(function (b) { b.checked = everything || perms.indexOf(b.value) !== -1; });
+            syncAll();
+          });
+        }
+      })();
+    </script>
+    {% endif %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save changes</button>
+      <a href="/admin/users" class="btn-cancel">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

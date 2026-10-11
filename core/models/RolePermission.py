@@ -1,0 +1,26 @@
+"""
+RolePermission
+----------------
+One row per (role, permission) pair that is granted - the checkbox matrix on
+the admin permissions page, stored. Rows reference roles.key and
+permissions.key by value rather than through database foreign keys: keys are
+the stable identifiers apps declare (see core/apps/AppManager.py), and the
+discovery sync (core/services/AccessService.py) prunes rows whose role or
+permission no longer exists.
+
+A superuser role (Role.is_superuser) never has rows here - it implicitly holds
+every permission.
+"""
+
+from core.database.fields import AutoField, CharField, UniqueTogether
+from core.models.BaseModel import BaseModel
+
+
+class RolePermission(BaseModel):
+    table_name = "role_permissions"
+    timestamps = False  # no created_at/updated_at columns on this table
+
+    id = AutoField()
+    role_key = CharField(max_length=100)
+    permission_key = CharField(max_length=100)
+    unique_pair = UniqueTogether(columns=["role_key", "permission_key"], name="uniq_role_permission")

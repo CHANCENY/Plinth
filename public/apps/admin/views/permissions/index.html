@@ -1,0 +1,85 @@
+{% extends "admin" %}
+{% block title %}Permissions{% endblock %}
+{% block page_title %}Permissions{% endblock %}
+{% block page_actions %}
+  <a href="/admin/permissions/new" class="btn btn-primary">Add permission</a>
+{% endblock %}
+
+{% block content %}
+{% if saved %}
+  <div class="alert alert-success">Saved.{% if users_updated %} Updated {{ users_updated }} existing user{{ '' if users_updated == 1 else 's' }}.{% endif %}</div>
+{% endif %}
+
+{% if roles|length == 0 or groups|length == 0 %}
+<div class="table-card">
+  <div class="empty-state">
+    <p>No roles or permissions found yet.</p>
+    <p class="cell-muted">Apps declare them in <code>permissions.py</code>. Run <code>python console.py apps:discover</code> to load them.</p>
+  </div>
+</div>
+{% else %}
+<form method="post" action="/admin/permissions">
+  <div class="table-card">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>Permission</th>
+          {% for role in roles %}
+          <th class="role-col" title="{{ role.description|default('', true) }}">
+            {{ role.label }}
+            <span class="role-key">{{ role.role_key }}</span>
+          </th>
+          {% endfor %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in groups %}
+        <tr class="group-row"><td colspan="{{ roles|length + 2 }}">{{ group.app }}</td></tr>
+        {% for permission in group.permissions %}
+        <tr>
+          <td>
+            <div class="perm-label">{{ permission.label }}{% if permission.source == 'custom' %} <span class="badge-custom">custom</span>{% endif %}</div>
+            <div class="perm-key">{{ permission.permission_key }}</div>
+            {% if permission.description %}<div class="perm-desc">{{ permission.description }}</div>{% endif %}
+          </td>
+          {% for role in roles %}
+          <td class="check">
+            {% if role.is_superuser %}
+            <input type="checkbox" checked disabled title="{{ role.label }} holds every permission" aria-label="{{ role.label }} holds {{ permission.label }}">
+            {% else %}
+            <input type="checkbox" name="grant:{{ role.role_key }}" value="{{ permission.permission_key }}"
+                   aria-label="{{ role.label }}: {{ permission.label }}"
+                   {% if permission.permission_key in grants.get(role.role_key, []) %}checked{% endif %}>
+            {% endif %}
+          </td>
+          {% endfor %}
+          <td class="cell-actions">
+            {% if permission.source == 'custom' %}
+            <a href="/admin/permissions/{{ permission.id }}/edit">Edit</a>
+            {# formaction, not a nested <form> - this row sits inside the matrix form #}
+            <span class="delete-form">
+              <button type="submit" formaction="/admin/permissions/{{ permission.id }}/delete" formmethod="post" formnovalidate
+                      onclick="return confirm('Delete {{ permission.permission_key }}? It is removed from every role and user.');">Delete</button>
+            </span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="matrix-footer">
+    <label class="check-inline">
+      <input type="checkbox" name="apply_to_users" value="1" checked>
+      <span>Apply these changes to existing users with these roles
+        <span class="field-hint" style="display:block">Newly ticked permissions are added to, and unticked ones removed from, each user's stored permissions. Anything else set on an individual user is left alone.</span>
+      </span>
+    </label>
+    <button type="submit" class="btn btn-primary">Save permissions</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

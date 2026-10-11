@@ -1,0 +1,28 @@
+{% extends "admin" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="stat-grid">
+  <div class="stat-card">
+    {% if current_user and current_user.has_permission("admin.users.manage") %}<a href="/admin/users">{% endif %}
+      <div class="stat-value">{{ stats.users_total }}</div>
+      <div class="stat-label">Total users</div>
+    {% if current_user and current_user.has_permission("admin.users.manage") %}</a>{% endif %}
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.users_active }}</div>
+    <div class="stat-label">Active users</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.users_pending }}</div>
+    <div class="stat-label">Pending users</div>
+  </div>
+  <div class="stat-card">
+    {% if current_user and current_user.has_permission("admin.files.manage") %}<a href="/admin/files">{% endif %}
+      <div class="stat-value">{{ stats.files_total }}</div>
+      <div class="stat-label">Files stored</div>
+    {% if current_user and current_user.has_permission("admin.files.manage") %}</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

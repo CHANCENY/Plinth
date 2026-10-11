@@ -1,0 +1,45 @@
+{% extends "admin" %}
+{% block title %}Add user{% endblock %}
+{% block page_title %}Add user{% endblock %}
+
+{% block content %}
+<div class="form-card">
+  <form method="post" action="/admin/users/new">
+    <div class="field">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" value="{{ old.name|default('') }}" required autofocus>
+      {% if errors.name %}<div class="field-error">{{ errors.name[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" value="{{ old.email|default('') }}" required>
+      {% if errors.email %}<div class="field-error">{{ errors.email[0] }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required>
+      {% if errors.password %}<div class="field-error">{{ errors.password[0] }}</div>{% endif %}
+    </div>
+    {% if can_assign %}
+    <div class="field">
+      <label for="role">Role</label>
+      {% if roles|length == 0 %}
+      <div class="field-hint">No roles found yet - run <code>python console.py apps:discover</code>. The account will get the default role.</div>
+      {% else %}
+      <select id="role" name="role">
+        {% for role in roles %}
+        <option value="{{ role.role_key }}" {% if (old.role or default_role) == role.role_key %}selected{% endif %}>{{ role.label }}</option>
+        {% endfor %}
+      </select>
+      <div class="field-hint">The user starts with the permissions this role grants; you can fine-tune them afterwards by editing the user.</div>
+      {% endif %}
+      {% if errors.role %}<div class="field-error">{{ errors.role[0] }}</div>{% endif %}
+    </div>
+    {% endif %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Add user</button>
+      <a href="/admin/users" class="btn-cancel">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
