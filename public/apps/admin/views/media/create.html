@@ -1,0 +1,66 @@
+{% extends "admin" %}
+{% block title %}Upload media{% endblock %}
+{% block page_title %}Upload media{% endblock %}
+
+{% block content %}
+<div class="form-card wide">
+  {% if uploaded %}
+  <div class="alert alert-success">Uploaded {{ uploaded }} file{{ '' if uploaded == 1 else 's' }}. <a href="/admin/media">Back to the library</a></div>
+  {% endif %}
+  {% if problems %}
+  <div class="alert alert-error">
+    <strong>{{ 'These files were not uploaded:' if uploaded else 'Nothing was uploaded:' }}</strong>
+    <ul class="problem-list">
+      {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="post" action="/admin/media/new" enctype="multipart/form-data">
+    <label class="dropzone" id="dropzone">
+      <input type="file" id="files" name="files" multiple accept="{{ accept }}" required>
+      <span class="dropzone-title">Drop files here, or click to choose</span>
+      <span class="dropzone-hint">Up to {{ max_mb|round(1) }} MB each &middot; {{ allowed|join(', ') }}</span>
+      <ul class="dropzone-files" id="dropzone-files"></ul>
+    </label>
+
+    <label class="check-inline" style="margin: 14px 0 16px">
+      <input type="checkbox" name="status" value="1" {% if published %}checked{% endif %}>
+      <span>Published</span>
+    </label>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Upload</button>
+      <a href="/admin/media" class="btn-cancel">Cancel</a>
+    </div>
+  </form>
+  <p class="field-hint" style="margin-top: 14px">A single file takes you straight to its edit form to add alt text; several files go back to the library.</p>
+</div>
+
+<script>
+  (function () {
+    var zone = document.getElementById('dropzone');
+    var input = document.getElementById('files');
+    var list = document.getElementById('dropzone-files');
+    function show() {
+      list.innerHTML = '';
+      Array.prototype.forEach.call(input.files, function (f) {
+        var li = document.createElement('li');
+        li.textContent = f.name + ' (' + Math.max(1, Math.round(f.size / 1024)) + ' KB)';
+        list.appendChild(li);
+      });
+    }
+    input.addEventListener('change', show);
+    ['dragenter', 'dragover'].forEach(function (name) {
+      zone.addEventListener(name, function (e) { e.preventDefault(); zone.classList.add('dragging'); });
+    });
+    ['dragleave', 'drop'].forEach(function (name) {
+      zone.addEventListener(name, function () { zone.classList.remove('dragging'); });
+    });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; show(); }
+    });
+  })();
+</script>
+{% endblock %}

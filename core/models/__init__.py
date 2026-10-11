@@ -1,5 +1,6 @@
 from core.models.BaseModel import BaseModel
 from core.models.File import File
+from core.models.Media import Media
 from core.models.OAuthIdentity import OAuthIdentity
 from core.models.PasswordReset import PasswordReset
 from core.models.Permission import Permission
@@ -11,5 +12,5 @@ from core.models.User import User
 
 __all__ = [
     "BaseModel", "QuerySet", "User", "File", "OAuthIdentity", "Session", "PasswordReset",
-    "Role", "Permission", "RolePermission",
+    "Role", "Permission", "RolePermission", "Media",
 ]

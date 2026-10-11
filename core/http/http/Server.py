@@ -11,7 +11,20 @@ from core.services.SessionService import SessionService
 class Server(BaseHTTPRequestHandler):
 
     def _handle_request(self):
-        request = Request.from_handler(self)
+        try:
+            request = Request.from_handler(self)
+        except ValueError as exc:
+            # body over the size limit, or a malformed multipart body. The body was not read, so
+            # the connection can't be reused - tell the client and close it.
+            too_large = "exceeds maximum size" in str(exc)
+            response = Response(
+                "Payload Too Large" if too_large else f"Bad Request: {exc}",
+                413 if too_large else Response.HTTP_BAD_REQUEST,
+                {"Connection": "close"},
+            )
+            self.close_connection = True
+            response.send(self)
+            return
 
         # Resolve who's making this request once, here, so Routing can enforce each route's
         # "permission" list for real (previously current_user was never set, so

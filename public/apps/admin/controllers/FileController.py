@@ -1,10 +1,11 @@
 """
 FileController
 -----------------
-Admin management for the file_managed table: list/edit/delete. There's no
-create() here - a File record is meant to come from an actual upload
-(StorageService.store()), not a bare form, so there's nothing sensible to
-hand-create. Every route here requires the "admin.files.manage" permission (see
+Admin management for the file_managed table: list/edit/delete - the low-level view of stored
+files, like Drupal's Files screen. There's no create() here: a File record comes from an actual
+upload, and uploading is done in the media library (/admin/media/new -> MediaController), which
+creates the File and the media item that wraps it together. A file that a media item still uses
+can't be deleted from here - delete the media item instead. Every route here requires the "admin.files.manage" permission (see
 the @route decorators below) - PermissionMiddleware enforces that before any of these methods
 ever runs.
 """
@@ -12,6 +13,7 @@ ever runs.
 from core.controllers.ControllerBase import ControllerBase
 from core.http.routing.route import route
 from core.models.File import File
+from core.models.Media import Media
 
 EDITABLE_STATUSES = ("temporary", "permanent")
 
@@ -57,6 +59,12 @@ class FileController(ControllerBase):
         file_record = self._find_or_404(request)
         if file_record is None:
             return self.not_found("File not found")
+
+        in_use = Media.using_file(self.db(), file_record.fid)
+        if in_use is not None:
+            return self.forbidden(
+                f"This file is used by the media item '{in_use.name}' - delete that item in the media library instead."
+            )
 
         file_record.delete()  # soft delete - see File.delete(); doesn't remove the underlying stored file
         return self.redirect("/admin/files")

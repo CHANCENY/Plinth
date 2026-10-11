@@ -12,6 +12,7 @@ from .HeaderBag import HeaderBag
 from .ServerBag import ServerBag
 from .CookieBag import CookieBag
 from .FileBag import FileBag
+from .MultipartParser import MultipartParser
 
 
 class Request:
@@ -110,15 +111,17 @@ class Request:
 
         content_type = headers.get("Content-Type", "")
         request_data = {}
+        files = {}
 
-        if (
-            content
-            and content_type.lower().split(";", 1)[0].strip()
-            == "application/x-www-form-urlencoded"
-        ):
+        media_type = content_type.lower().split(";", 1)[0].strip()
+
+        if content and media_type == "application/x-www-form-urlencoded":
             request_data = cls._parse_query(
                 content.decode("utf-8", errors="replace")
             )
+        elif content and media_type == "multipart/form-data":
+            # text fields land in request_data like a urlencoded form's; uploads in request.files
+            request_data, files = MultipartParser.parse(content, content_type)
 
         cookies = cls._parse_cookies(
             headers.get("Cookie", "")
@@ -138,7 +141,7 @@ class Request:
             request=request_data,
             cookies=cookies,
             server=server,
-            files={},
+            files=files,
             content=content,
             handler=handler,
         )

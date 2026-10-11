@@ -187,10 +187,29 @@ class Routing:
         route_parts = self.normalize_path(route_path).split("/")
         request_parts = self.normalize_path(request_path).split("/")
 
+        parameters = {}
+
+        # A final "<name:path>" segment captures everything after the static part, slashes
+        # included - e.g. "/uploads/<path:path>" matches /uploads/media/2026-10/photo.png with
+        # path="media/2026-10/photo.png". It needs at least one segment to capture.
+        last = route_parts[-1]
+        if last.startswith("<") and last.endswith(":path>"):
+            fixed = route_parts[:-1]
+            if len(request_parts) <= len(fixed):
+                return None
+            for route_part, request_part in zip(fixed, request_parts):
+                if route_part.startswith("<") and route_part.endswith(">"):
+                    parameters[route_part[1:-1]] = request_part
+                elif route_part != request_part:
+                    return None
+            name = last[1:-len(":path>")]
+            if not name:
+                return None
+            parameters[name] = "/".join(request_parts[len(fixed):])
+            return parameters
+
         if len(route_parts) != len(request_parts):
             return None
-
-        parameters = {}
 
         for route_part, request_part in zip(
                 route_parts,

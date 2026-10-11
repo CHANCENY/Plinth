@@ -102,7 +102,7 @@ class StorageService:
 
         uploaded_file.move(destination)
 
-        uri = str(Path(disk) / subdirectory / stored_name) if subdirectory else str(Path(disk) / stored_name)
+        uri = (Path(disk) / subdirectory / stored_name if subdirectory else Path(disk) / stored_name).as_posix()
 
         record = File(
             self.db,

@@ -6,6 +6,7 @@ from .ServerBag import ServerBag
 from .CookieBag import CookieBag
 from .FileBag import FileBag
 from .UploadedFile import UploadedFile
+from .MultipartParser import MultipartParser
 
 __all__ = [
     "Request",
@@ -16,4 +17,5 @@ __all__ = [
     "CookieBag",
     "FileBag",
     "UploadedFile",
+    "MultipartParser",
 ]

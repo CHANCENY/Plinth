@@ -26,6 +26,14 @@ MENUS = [
         "weight": 100,
     },
     {
+        "key": "admin.media",
+        "label": "Media",
+        "path": "/admin/media",
+        "group": "Manage",
+        "permission": ["admin.media.manage"],
+        "weight": 105,
+    },
+    {
         "key": "admin.files",
         "label": "Files",
         "path": "/admin/files",

@@ -1,0 +1,66 @@
+"""
+Media
+-------
+Wraps the 'media' table - the media library's items, modelled on Drupal's Media: a Media item is
+the thing editors work with (a name, alt text, a published flag, a type) and it *references* a
+File (core/models/File.py, the 'file_managed' table), which is the stored upload itself. Several
+kinds of content can later point at a media item without caring where the bytes live.
+
+`bundle` is the media type, decided from the file's extension when it's uploaded (see
+core/services/MediaService.py):
+    image       png, jpg, jpeg, gif, webp
+    document    pdf, txt, csv, doc/docx, xls/xlsx, ppt/pptx, odt/ods/odp
+    audio       mp3, wav, ogg, m4a
+    video       mp4, webm, mov
+
+Deleting a media item removes its stored file too (MediaService.delete()). `status` is Drupal's
+"published" flag - stored and shown in the library; note that files on the public disk are
+reachable by URL regardless, the same as Drupal's public files.
+"""
+
+from typing import Optional
+
+from core.database.fields import AutoField, BooleanField, CharField, EnumField, ForeignKey, IntegerField, TimestampField
+from core.models.BaseModel import BaseModel
+from core.models.File import File
+
+
+class Media(BaseModel):
+    table_name = "media"
+
+    BUNDLES = ("image", "document", "audio", "video")
+
+    mid = AutoField()
+    bundle = EnumField(choices=list(BUNDLES), default="document")
+    name = CharField(max_length=255)
+    fid = IntegerField()  # the File this item wraps
+    alt = CharField(max_length=512, null=True)  # alternative text - used by images
+    uid = IntegerField(null=True)  # who uploaded it
+    status = BooleanField(default=True)  # published
+    created_at = TimestampField(auto_now_add=True)
+    updated_at = TimestampField(auto_now_add=True, auto_now=True)
+    fid_fk = ForeignKey(column="fid", references="file_managed", references_column="fid")
+    uid_fk = ForeignKey(column="uid", references="users", references_column="uid")
+
+    def __init__(self, db_connection, **attributes):
+        super().__init__(db_connection, **attributes)
+        self.attributes.setdefault("bundle", "document")
+        self.attributes.setdefault("status", True)
+
+    def save(self) -> "Media":
+        if self.attributes.get("bundle") not in (None, *self.BUNDLES):
+            raise ValueError(f"Invalid bundle '{self.attributes['bundle']}'. Expected one of {self.BUNDLES}")
+        return super().save()
+
+    @property
+    def is_published(self) -> bool:
+        return bool(self.attributes.get("status"))
+
+    def file(self) -> Optional[File]:
+        """The File this item wraps (None if its row is gone)."""
+        return File.find(self.db, self.attributes.get("fid"))
+
+    @classmethod
+    def using_file(cls, db_connection, fid) -> Optional["Media"]:
+        """The media item that wraps file `fid`, if any - how the Files screen knows a file is in use."""
+        return cls.objects(db_connection).filter(fid=fid).first()

@@ -39,6 +39,7 @@ from core.database.MigrationFile import latest_fields_for_table, list_migration_
 from core.models.BaseModel import BaseModel
 from core.models.File import File
 from core.models.OAuthIdentity import OAuthIdentity
+from core.models.Media import Media
 from core.models.PasswordReset import PasswordReset
 from core.models.Permission import Permission
 from core.models.Role import Role
@@ -56,6 +57,7 @@ MODELS: List[Type[BaseModel]] = [
     Role,
     Permission,
     RolePermission,
+    Media,
 ]
 
 MIGRATIONS_TABLE = "migrations"

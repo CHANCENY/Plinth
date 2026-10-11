@@ -1,0 +1,73 @@
+{% extends "admin" %}
+{% block title %}Edit media{% endblock %}
+{% block page_title %}Edit media{% endblock %}
+
+{% block content %}
+{% if created %}<div class="alert alert-success">Uploaded. Add alt text and check the name, then save.</div>{% endif %}
+{% if saved %}<div class="alert alert-success">Saved.</div>{% endif %}
+
+<div class="form-card wide">
+  <div class="media-preview">
+    {% if not file or not url %}
+      <span class="media-badge">{{ extension }}</span>
+    {% elif media.bundle == 'image' %}
+      <img src="{{ url }}" alt="{{ media.alt or media.name }}">
+    {% elif media.bundle == 'audio' %}
+      <audio controls preload="metadata" src="{{ url }}"></audio>
+    {% elif media.bundle == 'video' %}
+      <video controls preload="metadata" src="{{ url }}"></video>
+    {% else %}
+      <span class="media-badge">{{ extension }}</span>
+      <a href="{{ url }}" target="_blank" rel="noopener">Open file</a>
+    {% endif %}
+  </div>
+
+  {% if file %}
+  <dl class="media-facts">
+    <dt>File</dt><dd>{{ file.filename }}</dd>
+    <dt>Type</dt><dd>{{ media.bundle }} &middot; {{ file.filemime }}</dd>
+    <dt>Size</dt><dd>{{ size }}</dd>
+    <dt>URL</dt><dd class="cell-mono">{{ url }}</dd>
+  </dl>
+  {% endif %}
+
+  <form method="post" action="/admin/media/{{ media.mid }}/edit" enctype="multipart/form-data">
+    <div class="field">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" value="{{ old.name|default(media.name) }}" required>
+      {% if errors.name %}<div class="field-error">{{ errors.name[0] }}</div>{% endif %}
+    </div>
+
+    {% if media.bundle == 'image' %}
+    <div class="field">
+      <label for="alt">Alternative text</label>
+      <input type="text" id="alt" name="alt" value="{{ old.alt|default(media.alt or '') }}">
+      <div class="field-hint">Describes the image for people using screen readers. Leave empty only for purely decorative images.</div>
+      {% if errors.alt %}<div class="field-error">{{ errors.alt[0] }}</div>{% endif %}
+    </div>
+    {% endif %}
+
+    <div class="field">
+      <label for="file">Replace file <span class="cell-muted">(optional)</span></label>
+      <input type="file" id="file" name="file" accept="{{ accept }}">
+      <div class="field-hint">Must be another {{ media.bundle }} file. The current file is removed once the new one is saved.</div>
+      {% if errors.file %}<div class="field-error">{{ errors.file[0] }}</div>{% endif %}
+    </div>
+
+    <label class="check-inline" style="margin: 4px 0 16px">
+      <input type="checkbox" name="status" value="1" {% if published %}checked{% endif %}>
+      <span>Published</span>
+    </label>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save changes</button>
+      <a href="/admin/media" class="btn-cancel">Cancel</a>
+    </div>
+  </form>
+
+  <form class="media-danger" method="post" action="/admin/media/{{ media.mid }}/delete"
+        data-confirm="Delete this media item? The file is removed too." onsubmit="return confirm(this.dataset.confirm);">
+    <button type="submit" class="btn-danger">Delete this item</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,76 @@
+{% extends "admin" %}
+{% block title %}Media{% endblock %}
+{% block page_title %}Media{% endblock %}
+{% block page_actions %}
+  <a href="/admin/media/new" class="btn btn-primary">Upload media</a>
+{% endblock %}
+
+{% block content %}
+{% if uploaded %}<div class="alert alert-success">Uploaded {{ uploaded }} file{{ '' if uploaded == 1 else 's' }}.</div>{% endif %}
+{% if deleted %}<div class="alert alert-success">Media item deleted.</div>{% endif %}
+
+<div class="media-toolbar">
+  <div class="type-tabs">
+    <a href="{{ all_url }}" class="{% if not bundle %}active{% endif %}">All <span>{{ all_count }}</span></a>
+    {% for b in ['image', 'document', 'audio', 'video'] %}
+    <a href="{{ type_urls[b] }}" class="{% if bundle == b %}active{% endif %}">{{ b|capitalize }} <span>{{ counts[b] }}</span></a>
+    {% endfor %}
+  </div>
+  <form method="get" action="/admin/media" class="media-search">
+    {% if bundle %}<input type="hidden" name="type" value="{{ bundle }}">{% endif %}
+    <input type="search" name="q" value="{{ search }}" placeholder="Search by name" aria-label="Search media by name">
+    <button type="submit" class="btn btn-secondary">Search</button>
+  </form>
+</div>
+
+{% if rows|length == 0 %}
+<div class="table-card">
+  <div class="empty-state">
+    {% if search or bundle %}
+    <p>No media matches that filter.</p>
+    <p><a href="/admin/media">Clear filters</a></p>
+    {% else %}
+    <p>No media yet.</p>
+    <p><a href="/admin/media/new">Upload your first file</a></p>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="media-grid">
+  {% for row in rows %}
+  <div class="media-card">
+    <a class="media-thumb" href="/admin/media/{{ row.media.mid }}/edit" aria-label="Edit {{ row.media.name }}">
+      {% if row.media.bundle == 'image' and row.url %}
+      <img src="{{ row.url }}" alt="{{ row.media.alt or row.media.name }}" loading="lazy">
+      {% else %}
+      <span class="media-badge">{{ row.extension }}</span>
+      {% endif %}
+    </a>
+    <div class="media-info">
+      <div class="media-name" title="{{ row.media.name }}">{{ row.media.name }}</div>
+      <div class="media-meta">
+        <span class="status-pill status-pending">{{ row.media.bundle }}</span>
+        {% if not row.media.is_published %}<span class="status-pill status-blocked">unpublished</span>{% endif %}
+        <span class="cell-muted">{{ row.size }}</span>
+      </div>
+    </div>
+    <div class="media-actions">
+      <a href="/admin/media/{{ row.media.mid }}/edit">Edit</a>
+      <form class="delete-form" method="post" action="/admin/media/{{ row.media.mid }}/delete"
+            data-confirm="Delete {{ row.media.name }}? The file is removed too." onsubmit="return confirm(this.dataset.confirm);">
+        <button type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if prev_url %}<a href="{{ prev_url }}">&larr; Previous</a>{% else %}<span></span>{% endif %}
+  <span class="cell-muted">Page {{ page }} of {{ pages }} &middot; {{ total }} item{{ '' if total == 1 else 's' }}</span>
+  {% if next_url %}<a href="{{ next_url }}">Next &rarr;</a>{% else %}<span></span>{% endif %}
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
