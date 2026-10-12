@@ -4,3 +4,4 @@ __pycache__
 storage
 migrations
 .idea
+public/uploads
