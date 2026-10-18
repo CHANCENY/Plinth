@@ -5,12 +5,27 @@ from core.http.request import Request
 from core.http.response import Response
 from core.http.routing.Routing import Routing
 from core.services.AuthService import AuthService
+from core.services.CorsService import CorsService
+from core.services.RequestAuthService import AuthenticationFailed, RequestAuthService
 from core.services.SessionService import SessionService
 
 
 class Server(BaseHTTPRequestHandler):
 
+    def _send(self, response):
+        """Every response leaves through here, so CORS headers (when PUBLIC_API_ENABLED - see CorsService) reach
+        errors and early rejections too, not just controller responses."""
+        CorsService().apply(response, self.headers)
+        response.send(self)
+
     def _handle_request(self):
+        cors = CorsService()
+        if self.command == "OPTIONS" and cors.is_preflight(self.headers):
+            # A browser asking permission for a cross-origin request. Answered right here: no body to read,
+            # no database, no session, no routing - it works for every URL, even one that has no route.
+            self._send(cors.preflight(self.headers))
+            return
+
         try:
             request = Request.from_handler(self)
         except ValueError as exc:
@@ -23,7 +38,7 @@ class Server(BaseHTTPRequestHandler):
                 {"Connection": "close"},
             )
             self.close_connection = True
-            response.send(self)
+            self._send(response)
             return
 
         # Resolve who's making this request once, here, so Routing can enforce each route's
@@ -33,8 +48,23 @@ class Server(BaseHTTPRequestHandler):
         # this instead of re-querying the session/user from scratch in every controller method
         # and every view() call.
         db = DatabaseConnection()
-        session = SessionService(db).start(request)
-        current_user = AuthService(db, session).user()
+
+        # Credentials in the request itself (API key, bearer token, signature ...) are checked first, by whatever
+        # authenticators registered apps provide (core/services/RequestAuthService.py). Bad credentials end the
+        # request here with a 401; none at all means "not an API call" and the session decides, as it always did.
+        try:
+            auth_result = RequestAuthService(db).authenticate(request)
+        except AuthenticationFailed as exc:
+            db.close()
+            self._send(exc.to_response())
+            return
+
+        if auth_result is not None:
+            current_user = auth_result.user
+            request._auth = auth_result
+        else:
+            session = SessionService(db).start(request)
+            current_user = AuthService(db, session).user()
         request._current_user = current_user
 
         routing = Routing(request)
@@ -49,7 +79,7 @@ class Server(BaseHTTPRequestHandler):
                 Response.HTTP_INTERNAL_SERVER_ERROR
             )
 
-        response.send(self)
+        self._send(response)
 
     def do_GET(self):
         self._handle_request()

@@ -1,0 +1,134 @@
+{% extends "admin:admin" %}
+{% block title %}Fake data{% endblock %}
+{% block page_title %}Fake data{% endblock %}
+
+{% block content %}
+{% if not enabled %}
+<div class="table-card"><div class="empty-state">
+  <p><strong>Fake data is switched off.</strong></p>
+  <p class="cell-muted">This page fills your database with made-up rows, so it only works when you turn it on explicitly - never do that where real data lives.</p>
+  <p>Set <code>FAKE_DATA_ENABLED=true</code> in <code>.env</code>, then reload. The same thing is available any time on the command line:</p>
+  <p><code>python console.py fake:generate User=20 Post=100</code></p>
+</div></div>
+{% else %}
+
+{% if not faker_installed %}
+<div class="alert alert-error">Faker isn't installed. Run <code>pip install Faker</code> and reload.</div>
+{% endif %}
+{% if errors.__all__ %}<div class="alert alert-error">{{ errors.__all__ }}</div>{% endif %}
+
+{% if undone %}
+  {% if undone.problems %}
+  <div class="alert alert-error"><strong>Run {{ undone.run_id }} could not be fully undone.</strong>
+    <ul class="problem-list">{% for p in undone.problems %}<li>{{ p }}</li>{% endfor %}</ul>It was kept so you can try again.</div>
+  {% else %}
+  <div class="alert alert-success">Run {{ undone.run_id }} undone -
+    {% for table, n in undone.deleted.items() %}{{ n }} row{{ '' if n == 1 else 's' }} from {{ table }}{{ ', ' if not loop.last }}{% endfor %}.</div>
+  {% endif %}
+{% endif %}
+
+{% if result %}
+<div class="alert alert-success">
+  <strong>Created {{ result.total }} row{{ '' if result.total == 1 else 's' }} in {{ '%.1f'|format(result.seconds) }}s.</strong>
+  {% for table, n in result.created.items() %}{{ n }} in <code>{{ table }}</code>{{ ', ' if not loop.last }}{% endfor %}.
+  {% if password %}<br>Fake users sign in with the password <code>{{ password }}</code>.{% endif %}
+  <br><span class="cell-muted">Run <code>{{ result.run_id }}</code> - you can undo it below.</span>
+</div>
+{% endif %}
+
+{% if previews %}
+{% for model, count, rows in previews %}
+<h2 style="font-size:1rem;margin:20px 0 8px">Preview: {{ model.__name__ }} <span class="cell-muted">(sample of {{ rows|length }}; nothing was saved)</span></h2>
+<div class="table-card" style="overflow-x:auto">
+  <table>
+    <thead><tr>{% for column in rows[0].keys() %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in rows %}<tr>{% for value in row.values() %}<td class="cell-muted" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ value }}">{{ '' if value is none else value }}{% if value is none %}<em>NULL</em>{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table>
+</div>
+{% endfor %}
+{% endif %}
+
+<div class="form-card wide" style="max-width:760px;margin-top:20px">
+  <form method="post" action="/admin/fake-data" id="fake-form">
+    <h2 style="font-size:1rem;margin:0 0 4px">What to create</h2>
+    <p class="field-hint" style="margin:0 0 12px">Into <code>{{ database }}</code>. Parents are created first, and related rows are made as needed.</p>
+    <table class="fake-models">
+      <thead><tr><th></th><th>Model</th><th>Rows now</th><th>How many</th></tr></thead>
+      <tbody>
+        {% for info in catalog %}
+        <tr>
+          <td><input type="checkbox" name="use_{{ info.table }}" value="1" id="use_{{ info.table }}" {% if old.get('use_' ~ info.table) %}checked{% endif %}></td>
+          <td><label for="use_{{ info.table }}">{{ info.name }}</label> <span class="cell-muted cell-mono">{{ info.table }}</span>{% if info.customised %} <span class="badge-custom">customised</span>{% endif %}</td>
+          <td class="cell-muted">{{ '-' if info.rows is none else info.rows }}</td>
+          <td><input type="number" name="count_{{ info.table }}" min="1" max="{{ max_rows }}" value="{{ old.get('count_' ~ info.table) or info.default_count }}" style="width:90px">
+            {% if errors.get('count_' ~ info.table) %}<div class="field-error">{{ errors.get('count_' ~ info.table) }}</div>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <fieldset class="perm-fieldset" style="margin-top:18px">
+      <legend>Options</legend>
+      <div class="field">
+        <label for="locale">Language of the data</label>
+        <select id="locale" name="locale">{% for code, label in locales %}<option value="{{ code }}" {% if (old.get('locale') or 'en_US') == code %}selected{% endif %}>{{ label }} ({{ code }})</option>{% endfor %}</select>
+        {% if errors.locale %}<div class="field-error">{{ errors.locale }}</div>{% endif %}
+      </div>
+      <div class="field">
+        <label for="seed">Seed <span class="cell-muted">(optional)</span></label>
+        <input type="text" id="seed" name="seed" value="{{ old.get('seed') or '' }}" placeholder="e.g. 42">
+        <div class="field-hint">The same seed gives the same data every time.</div>
+        {% if errors.seed %}<div class="field-error">{{ errors.seed }}</div>{% endif %}
+      </div>
+      <div class="field">
+        <label for="password">Password for fake users</label>
+        <input type="text" id="password" name="password" value="{{ old.get('password') or 'password' }}">
+        {% if errors.password %}<div class="field-error">{{ errors.password }}</div>{% endif %}
+      </div>
+      <div class="field">
+        <label for="null_percent">Empty optional fields <span class="cell-muted">(% of the time)</span></label>
+        <input type="number" id="null_percent" name="null_percent" min="0" max="100" value="{{ old.get('null_percent') or 10 }}" style="width:90px">
+        {% if errors.null_percent %}<div class="field-error">{{ errors.null_percent }}</div>{% endif %}
+      </div>
+      <label class="check-inline">
+        <input type="checkbox" name="create_related" value="1" {% if first_visit or old.get('create_related') %}checked{% endif %}>
+        <span>Create rows in related tables that are empty</span>
+      </label>
+    </fieldset>
+
+    <div class="form-actions" style="margin-top:16px">
+      <button type="submit" name="action" value="preview" class="btn btn-secondary">Preview</button>
+      <button type="submit" name="action" value="generate" class="btn btn-primary"
+              data-confirm="Insert the selected fake rows into {{ database }}?" onclick="return confirm(this.dataset.confirm);">Generate</button>
+    </div>
+  </form>
+</div>
+
+<h2 style="font-size:1rem;margin:28px 0 10px">Earlier runs</h2>
+<div class="table-card">
+  {% if runs|length == 0 %}
+  <div class="empty-state"><p>No recorded runs yet.</p></div>
+  {% else %}
+  <table>
+    <thead><tr><th>Run</th><th>When</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td class="cell-mono">{{ run.id }}</td>
+        <td class="cell-muted">{{ run.created_at }}</td>
+        <td class="cell-muted">{% for item in run['items'] %}{{ item.ids|length }} {{ item.table }}{{ ', ' if not loop.last }}{% endfor %}</td>
+        <td class="cell-actions">
+          <form class="delete-form" method="post" action="/admin/fake-data/runs/{{ run.id }}/undo"
+                data-confirm="Delete the rows created by run {{ run.id }}?" onsubmit="return confirm(this.dataset.confirm);">
+            <button type="submit">Undo</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+<style>.fake-models td, .fake-models th { padding: 6px 10px; text-align: left; } .fake-models { min-width: 0; width: 100%; }</style>
+{% endif %}
+{% endblock %}

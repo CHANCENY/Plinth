@@ -71,7 +71,7 @@ Usage
 
 App views: prefix the view name with "<app_name>:" to render out of
 public/apps/<app_name>/views/ instead of a theme (see core/apps/AppManager.py
-for the rest of the apps system). An app's views are fully independent of
+for the rest of the apps system). An app's views are independent (they can still reuse another app's layout - see _app_prefix_loader) of
 every theme - its own {% extends %}/{% include %} only ever resolve within
 that same app's views/ directory:
 
@@ -83,7 +83,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from jinja2 import ChainableUndefined, Environment, FileSystemLoader, TemplateNotFound, select_autoescape
+from jinja2 import ChainableUndefined, ChoiceLoader, Environment, FileSystemLoader, PrefixLoader, TemplateNotFound, select_autoescape
 
 from core.services.EnvService import EnvService
 
@@ -124,7 +124,7 @@ class TemplateService:
         key = str(root)
         if key not in self._environments:
             self._environments[key] = Environment(
-                loader=_ExtensionlessLoader(str(root)),
+                loader=ChoiceLoader([_ExtensionlessLoader(str(root)), self._app_prefix_loader()]),
                 autoescape=select_autoescape(["html", "htm", "xml"]),
                 trim_blocks=True,
                 lstrip_blocks=True,
@@ -135,6 +135,20 @@ class TemplateService:
                 undefined=ChainableUndefined,
             )
         return self._environments[key]
+
+    def _app_prefix_loader(self) -> PrefixLoader:
+        """
+        Lets any template pull in another app's templates by prefixing the name with the app and a colon:
+        {% extends "admin:admin" %} (the dashboard layout) or {% include "admin:partials/nav" %}. The
+        template's own views/ directory is always searched first, so unprefixed names resolve exactly as
+        they always did; this is only the fallback for "<app>:<template>".
+        """
+        loaders = {}
+        if self.apps_root.is_dir():
+            for app_dir in sorted(self.apps_root.iterdir()):
+                if (app_dir / "views").is_dir():
+                    loaders[app_dir.name] = _ExtensionlessLoader(str(app_dir / "views"))
+        return PrefixLoader(loaders, delimiter=":")
 
     @staticmethod
     def _template_name(view: str) -> str:

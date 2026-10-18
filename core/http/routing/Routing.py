@@ -107,7 +107,8 @@ class Routing:
                 Response.HTTP_METHOD_NOT_ALLOWED
             )
 
-            allowed_methods = ", ".join(route["method"])
+            # every method any route on this path accepts (GET /items and POST /items are separate routes)
+            allowed_methods = ", ".join(route.get("allowed_methods") or route["method"])
 
             response.set_header(
                 "Allow",
@@ -127,25 +128,39 @@ class Routing:
     # ------------------------------------------------------------------
 
     def match_route(self):
+        """
+        The route that should handle this request. Several routes may share a path with different methods
+        (GET /items -> index, POST /items -> create, each its own controller method), so every route whose path
+        matches is considered and the first one that also allows the request's method wins. If the path matches
+        but no route allows the method, the first path match is returned and dispatch() answers 405 - with
+        "allowed_methods" listing every method that path does accept, for the Allow header.
+        """
         request_path = self.get_request_path()
 
-        for route in self.routes:
-            route_path = route["path"]
+        first_match = None
+        allowed = []
 
-            parameters = self.match_path(
-                route_path,
-                request_path
-            )
+        for route in self.routes:
+            parameters = self.match_path(route["path"], request_path)
 
             if parameters is None:
                 continue
 
-            return {
-                **route,
-                "parameters": parameters,
-            }
+            matched = {**route, "parameters": parameters}
 
-        return None
+            if self.method_allowed(route):
+                return matched
+
+            if first_match is None:
+                first_match = matched
+            for method in route["method"]:
+                if method.upper() not in allowed:
+                    allowed.append(method.upper())
+
+        if first_match is not None:
+            first_match["allowed_methods"] = allowed
+
+        return first_match
 
     def get_request_path(self):
         """

@@ -14,3 +14,7 @@ mysql-connector-python>=8.0.0
 # pymongo>=4.0.0
 
 Jinja2>=3.1.0
+
+# Fake data for development (python console.py fake:generate ...). Only needed on machines where you use it;
+# production installs can leave it out - everything else works without it.
+Faker>=24.0.0

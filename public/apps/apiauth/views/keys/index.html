@@ -1,0 +1,95 @@
+{% extends "admin:admin" %}
+{% block title %}API keys{% endblock %}
+{% block page_title %}API keys{% endblock %}
+
+{% block content %}
+{% if revoked %}<div class="alert alert-success">Key revoked.</div>{% endif %}
+
+{% if new_secret %}
+<div class="alert alert-success">
+  <strong>{{ 'New secret' if rotated else 'Key created' }} for "{{ new_key.name }}".</strong> Copy it now - it is shown only once.
+  <div class="secret-box">{{ new_secret }}</div>
+  {% if signing_secret %}
+  <p class="field-hint" style="margin:10px 0 4px">Signing secret, for signed requests (<code>{{ new_key.key_id }}</code>):</p>
+  <div class="secret-box">{{ signing_secret }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="table-card">
+  {% if rows|length == 0 %}
+  <div class="empty-state"><p>No API keys yet.</p><p class="cell-muted">Create one below, then send it as <code>X-API-Key: &lt;key&gt;</code>.</p></div>
+  {% else %}
+  <table>
+    <thead><tr><th>Name</th><th>Key id</th><th>Can do</th><th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.key.name }}</td>
+        <td class="cell-mono">{{ row.key.key_id }}</td>
+        <td class="cell-muted">{{ row.scopes }}</td>
+        <td class="cell-muted">{{ row.created }}</td>
+        <td class="cell-muted">{{ row.expires }}</td>
+        <td class="cell-muted">{{ row.used }}</td>
+        <td>
+          {% if row.key.is_revoked %}<span class="status-pill status-blocked">revoked</span>
+          {% elif row.key.is_expired %}<span class="status-pill status-pending">expired</span>
+          {% else %}<span class="status-pill status-active">active</span>{% endif %}
+        </td>
+        <td class="cell-actions">
+          {% if row.key.is_usable %}
+          <form class="delete-form" method="post" action="/admin/api-keys/{{ row.key.key_id }}/rotate"
+                data-confirm="Generate a new secret for {{ row.key.name }}? The current one stops working immediately." onsubmit="return confirm(this.dataset.confirm);">
+            <button type="submit">Rotate</button>
+          </form>
+          <form class="delete-form" method="post" action="/admin/api-keys/{{ row.key.key_id }}/revoke"
+                data-confirm="Revoke {{ row.key.name }}? Anything using it stops working." onsubmit="return confirm(this.dataset.confirm);">
+            <button type="submit">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="form-card wide" style="margin-top:24px">
+  <h2 style="font-size:1rem;margin:0 0 14px">Create a key</h2>
+  <form method="post" action="/admin/api-keys">
+    <div class="field">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" value="{{ old.name|default('') }}" placeholder="e.g. nightly export job" required>
+      {% if errors.name %}<div class="field-error">{{ errors.name }}</div>{% endif %}
+    </div>
+    <div class="field">
+      <label for="expires_in_days">Expires after <span class="cell-muted">(days, optional)</span></label>
+      <input type="number" id="expires_in_days" name="expires_in_days" min="1" max="3650" value="{{ old.expires_in_days|default('') }}">
+      {% if errors.expires_in_days %}<div class="field-error">{{ errors.expires_in_days }}</div>{% endif %}
+    </div>
+    <fieldset class="perm-fieldset">
+      <legend>Limit what this key can do</legend>
+      <div class="field-hint" style="margin:4px 0 8px">Tick nothing for a key as powerful as your own account. Tick some to restrict it to just those permissions.</div>
+      {% for group in groups %}
+      <div class="perm-group">
+        <div class="perm-group-name">{{ group.app }}</div>
+        {% for permission in group.permissions %}
+        <label class="check-inline">
+          <input type="checkbox" name="scopes" value="{{ permission.permission_key }}">
+          <span>{{ permission.label }} <span class="perm-key">{{ permission.permission_key }}</span></span>
+        </label>
+        {% endfor %}
+      </div>
+      {% endfor %}
+      {% if errors.scopes %}<div class="field-error">{{ errors.scopes }}</div>{% endif %}
+    </fieldset>
+    <div class="form-actions"><button type="submit" class="btn btn-primary">Create key</button></div>
+  </form>
+</div>
+
+<style>
+  .secret-box { margin-top: 8px; padding: 10px 12px; background: #fff; border: 1px solid var(--border); border-radius: 6px;
+                font-family: var(--font-mono); font-size: 0.8125rem; word-break: break-all; user-select: all; color: var(--text); }
+</style>
+{% endblock %}

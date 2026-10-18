@@ -40,6 +40,14 @@ Usage
     python console.py migrate:status    # show which migrations have run / are pending
     python console.py migrate:fresh     # drop every registered table and re-run all migrations
 
+    python console.py fake:models                       # which models can be filled with fake data, and how many rows each has
+    python console.py fake:generate User=20 Post=100    # create fake rows (parents first; related rows are made as needed)
+    python console.py fake:generate Post --count 50 --seed 7 --locale fr_FR
+    python console.py fake:generate Post --dry-run      # show sample rows without saving anything
+    python console.py fake:runs                         # what earlier runs created
+    python console.py fake:undo [run_id]                # delete exactly what a run created (default: the latest)
+                                                        # needs `pip install Faker`; see core/fakedata/service.py
+
 Run this from the project root (same place as .env), since DatabaseConnection
 resolves paths (like a sqlite file) relative to it, and migrations/ is
 created there too.
@@ -138,6 +146,105 @@ def _sync_access(result) -> int:
     return 0
 
 
+def _fake_targets(service, args):
+    """["User=20", "Post"] -> [(User, 20), (Post, <--count or the model's default>)]"""
+    targets = []
+    for token in args.targets:
+        name, _, count_text = token.partition("=")
+        model = service.resolve(name)
+        try:
+            count = int(count_text) if count_text else (args.count or service.default_count(model))
+        except ValueError:
+            raise ValueError(f"'{token}': the count after '=' must be a whole number")
+        targets.append((model, count))
+    return targets
+
+
+def command_fake(args) -> int:
+    """fake:models / fake:generate / fake:runs / fake:undo - see core/fakedata/service.py."""
+    from core.fakedata.generators import FakeOptions
+    from core.fakedata.service import FakeDataError, FakeDataService, database_id
+
+    if not 0 <= args.null_ratio <= 1:
+        print("error: --null-ratio must be between 0 and 1", file=sys.stderr)
+        return 1
+
+    db = DatabaseConnection()
+    try:
+        service = FakeDataService(
+            db,
+            FakeOptions(locale=args.locale, seed=args.seed, password=args.password, null_ratio=args.null_ratio,
+                        create_related=not args.no_related),
+        )
+        try:
+            if args.command == "fake:models":
+                if not service.faker_available():
+                    print("note: Faker isn't installed yet - run: pip install Faker\n")
+                print(f"{'Model':18} {'Table':26} {'Rows':>7} {'Default':>8}  Customised")
+                for info in service.catalog():
+                    rows = "-" if info.rows is None else str(info.rows)
+                    print(f"{info.name:18} {info.table:26} {rows:>7} {info.default_count:>8}  {'yes' if info.customised else ''}")
+                print("\nGenerate with:  python console.py fake:generate <Model>[=count] ...")
+                return 0
+
+            if args.command == "fake:runs":
+                runs = service.runs()
+                if not runs:
+                    print("No recorded runs.")
+                for run in runs:
+                    summary = ", ".join(f"{i['table']}: {len(i['ids'])}" for i in run["items"])
+                    print(f"{run['id']}  {run['created_at']}  [{run.get('database')}]  {summary}")
+                return 0
+
+            if args.command == "fake:undo":
+                result = service.undo(args.targets[0] if args.targets else None, force=args.force)
+                for table, count in result.deleted.items():
+                    print(f"  deleted {count} row(s) from {table}")
+                for problem in result.problems:
+                    print(f"  problem: {problem}", file=sys.stderr)
+                print(f"Run {result.run_id} " + ("could not be fully undone - it is kept so you can retry." if result.problems else "undone."))
+                return 1 if result.problems else 0
+
+            # fake:generate
+            service.check_ready()  # Faker installed? locale valid? - before anything is printed or confirmed
+            if not args.targets:
+                print("error: name at least one model, e.g.  fake:generate User=20 Post=100   (see fake:models)", file=sys.stderr)
+                return 1
+            targets = _fake_targets(service, args)
+
+            if args.dry_run:
+                for model, count in targets:
+                    print(f"--- {model.__name__} (sample of {min(count, 5)}; nothing is saved) ---")
+                    for row in service.preview(model, min(count, 5)):
+                        print("  " + ", ".join(f"{k}={v!r}" for k, v in row.items()))
+                return 0
+
+            print(f"Database: {database_id()}")
+            for model, count in targets:
+                print(f"  {count} x {model.__name__}  ({model.table_name})")
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    print("error: not an interactive terminal - pass --yes to go ahead without asking", file=sys.stderr)
+                    return 1
+                if input("Insert these rows into that database? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("Cancelled.")
+                    return 1
+
+            result = service.generate(targets)
+            for table, count in result.created.items():
+                print(f"  created {count} row(s) in {table}")
+            print(f"Done: {result.total} row(s) in {result.seconds:.1f}s.  Run id: {result.run_id}")
+            if "users" in result.created:
+                print(f"Fake users sign in with the password: {args.password}")
+            print(f"Undo with:  python console.py fake:undo {result.run_id}")
+            return 0
+        except (FakeDataError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    finally:
+        db.close()
+
+
 def command_migration(migrator: Migrator) -> int:
     written = migrator.generate()
     if not written:
@@ -198,7 +305,8 @@ MIGRATOR_COMMANDS = {
     "migrate:fresh": command_fresh,
 }
 NO_DB_COMMANDS = {"serve": command_serve, "apps:discover": command_apps_discover}
-COMMANDS = {**NO_DB_COMMANDS, **MIGRATOR_COMMANDS}
+FAKE_COMMANDS = ("fake:models", "fake:generate", "fake:runs", "fake:undo")
+COMMANDS = {**NO_DB_COMMANDS, **MIGRATOR_COMMANDS, **{name: command_fake for name in FAKE_COMMANDS}}
 
 
 def main() -> int:
@@ -206,8 +314,20 @@ def main() -> int:
     parser.add_argument("command", choices=sorted(COMMANDS.keys()), help="Command to run.")
     parser.add_argument("--host", default=None, help="serve only: overrides .env's APP_HOST for this run.")
     parser.add_argument("--port", type=int, default=None, help="serve only: overrides .env's APP_PORT for this run.")
+    parser.add_argument("targets", nargs="*", help="fake:generate: Model[=count] ...; fake:undo: a run id.")
+    parser.add_argument("--count", type=int, default=None, help="fake:generate: rows for models named without =count.")
+    parser.add_argument("--locale", default="en_US", help="fake:generate: Faker locale, e.g. fr_FR, de_DE (default en_US).")
+    parser.add_argument("--seed", type=int, default=None, help="fake:generate: makes a run reproducible.")
+    parser.add_argument("--password", default="password", help="fake:generate: the password fake users get (default 'password').")
+    parser.add_argument("--null-ratio", type=float, default=0.1, help="fake:generate: how often a nullable column is NULL, 0-1 (default 0.1).")
+    parser.add_argument("--no-related", action="store_true", help="fake:generate: don't create rows in related tables that are empty.")
+    parser.add_argument("--dry-run", action="store_true", help="fake:generate: show sample rows, save nothing.")
+    parser.add_argument("--yes", action="store_true", help="fake:generate: don't ask for confirmation.")
+    parser.add_argument("--force", action="store_true", help="fake:undo: delete even if the run was made against a different database.")
     args = parser.parse_args()
 
+    if args.command in FAKE_COMMANDS:
+        return command_fake(args)
     if args.command == "serve":
         return command_serve(args.host, args.port)  # no DB/migrator needed to start the server
     if args.command == "apps:discover":

@@ -10,8 +10,8 @@ right next to the code that uses them.
 - **Apps, not a monolith.** A feature is a folder (`public/apps/<name>/`) with controllers, models, views,
   permissions and menus. Register it in one line and everything is discovered.
 - **Routes live on the method.** `@route("/notes/new", permission=["notes.write"])` - no central route table.
-- **Django-style ORM.** Declare fields on a model, query with `filter(title__icontains="x")`, evolve the
-  schema with generated migrations.
+- **Django-style ORM.** Declare fields on a model, query with `filter(title__icontains="x")` - including
+  `Q`/`F` expressions, aggregates, relationships and joins - and evolve the schema with generated migrations.
 - **Auth included.** Registration, login, password reset, database-backed sessions and optional
   Google / GitHub / Microsoft sign-in.
 - **Roles and permissions, Drupal-style.** Apps declare them; administrators tick a roles x permissions
@@ -34,10 +34,14 @@ right next to the code that uses them.
 - [Routing and controllers](#routing-and-controllers)
 - [Views](#views)
 - [Models, queries and migrations](#models-queries-and-migrations)
+- [Relationships](#relationships)
 - [Validation](#validation)
 - [Authentication](#authentication)
 - [Roles, permissions and menus](#roles-permissions-and-menus)
 - [Media library and file storage](#media-library-and-file-storage)
+- [Public API access (CORS)](#public-api-access-cors)
+- [API authentication (the apiauth app)](#api-authentication-the-apiauth-app)
+- [Fake data (development)](#fake-data-development)
 - [Configuration](#configuration)
 - [Command line](#command-line)
 - [Tutorial: build an app](#tutorial-build-an-app)
@@ -122,6 +126,10 @@ Built-in pages:
  browser
 ```
 
+Several routes can share a path with different methods (`GET /items` and `POST /items` as two controller methods): the first
+route whose path *and* method match handles the request, and a path that exists but not for that method gets `405` with an
+`Allow` header listing every method it does accept.
+
 Routes are matched in discovery order - apps in registration order, controllers by filename, methods
 alphabetically - and **the first match wins**. Keep a dynamic route like `/blog/<slug>` from shadowing a
 static one such as `/blog/new` (alphabetical method order happens to put `create` before `show`).
@@ -179,6 +187,8 @@ services/        plain helper classes - not scanned, import them yourself
 views/           Jinja2 templates, rendered as "<name>:path/to/view"
 permissions.py   optional - PERMISSIONS and ROLES the app declares
 menus.py         optional - items for the admin sidebar
+authenticators.py  optional - classes that identify API callers from their credentials (see API authentication)
+factories.py     optional - teaches the fake-data tools how to build realistic rows for your models
 ```
 
 ### Discovery
@@ -276,6 +286,10 @@ Pass `request=request` and every template also receives `current_user` (the sign
 Inside a template: `{% extends %}`, `{% include %}` and `{% block %}` resolve relative to the app's `views/`
 directory. Missing values degrade to an empty string rather than raising.
 
+An app can reuse another app's templates by prefixing the name with the app and a colon - the dashboard layout is
+`{% extends "admin:admin" %}`, which is how the `apiauth` pages look like part of the admin. Unprefixed names always
+resolve in the app's own `views/` first.
+
 Optional **themes** live in `public/views/<theme>/` and are used for view names *without* an app prefix;
 choose the default with `THEME_DEFAULT`.
 
@@ -300,9 +314,28 @@ class Note(BaseModel):
     updated_at = TimestampField(auto_now_add=True, auto_now=True)
 ```
 
-Field types: `AutoField`, `IntegerField`, `BigIntegerField`, `CharField`, `TextField`, `BooleanField`,
-`EnumField`, `DateTimeField`, `TimestampField`, `ForeignKey`, `UniqueTogether`. Set `timestamps = False` on a
-model without `created_at` / `updated_at` columns.
+Field types:
+
+| Field | Column | Python value |
+|---|---|---|
+| `AutoField`, `IntegerField`, `BigIntegerField`, `SmallIntegerField` | `INTEGER`, `BIGINT`, `SMALLINT` (`unsigned=True` on all but `AutoField`) | `int` |
+| `FloatField` | `DOUBLE` | `float` |
+| `DecimalField(max_digits, decimal_places)` | `DECIMAL(p,s)` - use it for money | `decimal.Decimal` |
+| `CharField(max_length)`, `TextField(size=)` | `VARCHAR`, `TEXT` / `MEDIUMTEXT` / `LONGTEXT` | `str` |
+| `BooleanField`, `EnumField(choices)` | `BOOLEAN`, `ENUM(...)` | `bool`, `str` |
+| `DateField`, `TimeField` | `DATE`, `TIME` | `datetime.date`, `datetime.time` |
+| `DateTimeField`, `TimestampField` | `TIMESTAMP` | passed through as the driver returns it |
+| `JSONField` | `JSON` | any JSON value - `dict`, `list`, ... |
+| `UUIDField(auto=False)` | `CHAR(36)`; `auto=True` generates a `uuid4` for new rows | `uuid.UUID` |
+| `BinaryField(max_length=None, size="blob")` | `BLOB` / `MEDIUMBLOB` / `LONGBLOB`, or `VARBINARY(n)` | `bytes` |
+| `ForeignKey`, `OneToOneField`, `ManyToManyField` | see [Relationships](#relationships) | the related model |
+| `UniqueTogether` | a table-level `UNIQUE` constraint | - |
+
+Fields convert in both directions, so the Python value is the same on every driver: save a `Decimal`, a
+`dict`, a `UUID`, a `date` or `bytes` and you get the same type back, and the same objects work in filters
+(`filter(price__gt=Decimal("9.99"))`). Pass JSON fields the Python object, not an already-encoded string.
+MySQL doesn't allow a `DEFAULT` on `JSON` and blob columns, so those fields refuse one - set defaults in code.
+Set `timestamps = False` on a model without `created_at` / `updated_at` columns.
 
 > **Avoid reserved words as column names** (`key`, `order`, `group`, ...). MySQL rejects them.
 
@@ -335,8 +368,123 @@ filter unless you pass `allow_all=True`.
 | `__contains`, `__icontains`, `__startswith`, `__endswith` | `LIKE` matches |
 | `__isnull=True/False` | `IS NULL` / `IS NOT NULL` |
 
-There are no joins, `Q` objects or annotations - conditions are ANDed. For anything else use
-`db.connect()` directly.
+A model instance can stand in for a relation's key: `filter(owner=user)`, `filter(owner__in=[a, b])`. `pk` means the
+primary key.
+
+#### OR, NOT and column arithmetic
+
+```python
+from core.models import Q, F
+
+Note.objects(db).filter(Q(title__icontains="plan") | Q(body__icontains="plan"))
+Note.objects(db).filter(Q(owner=ada) & ~Q(status="archived"))      # & | ~ and nesting
+Note.objects(db).exclude(Q(status="draft") | Q(status="archived"))
+
+Product.objects(db).filter(price__gt=F("cost") * 2)                 # compare a column with another
+Product.objects(db).filter(pk=1).update(stock=F("stock") - 1)       # one atomic UPDATE
+```
+
+#### Aggregates and grouping
+
+```python
+from core.models import Count, Sum, Avg, Min, Max
+
+Order.objects(db).aggregate(total=Sum("amount"), orders=Count("id"))     # {"total": Decimal(...), "orders": 12}
+
+(Media.objects(db)
+      .values("bundle").annotate(n=Count("mid"))                         # GROUP BY bundle
+      .filter(n__gt=1).order_by("-n"))                                   # HAVING / ORDER BY the aggregate
+```
+
+`annotate()` follows `values()` (it groups by those fields). Sums of `DecimalField`s come back as `Decimal`.
+
+#### Choosing what to load
+
+```python
+Note.objects(db).values("id", "title")                    # dicts instead of model instances
+Note.objects(db).values_list("title", flat=True)          # plain values
+Note.objects(db).values_list("owner_id", flat=True).distinct()
+
+Doc.objects(db).defer("body", "thumbnail")                # skip big columns ...
+Doc.objects(db).only("title")                             # ... or name the ones you want
+doc.thumbnail                                             # a deferred column is fetched on first read
+```
+
+A queryset loads every column of a row unless you say otherwise - use `defer()` for large text or blob columns.
+`Model.objects(db).none()` is a queryset that never matches (and never queries).
+
+### Relationships
+
+A `ForeignKey` wraps a column you declare normally, adds the `FOREIGN KEY` constraint, and lets you follow the
+relationship in Python and in queries:
+
+```python
+from core.database.fields import AutoField, CharField, IntegerField, ForeignKey, OneToOneField, ManyToManyField, UniqueTogether
+
+class Book(BaseModel):
+    table_name = "books"
+    id = AutoField()
+    title = CharField(max_length=100)
+    author_id = IntegerField(null=True)
+    author = ForeignKey(column="author_id", references=Author,
+                        on_delete="SET NULL", related_name="books")
+```
+
+```python
+book.author                          # the Author (fetched on first access, then cached)
+book.author = ada                    # sets author_id; Book(db, author=ada) works too
+ada.books                            # reverse side: a normal QuerySet of her books
+ada.books.create(title="New")        # fills in author_id for you
+
+Book.objects(db).filter(author__name="Ada")             # follow a relation in a filter, any depth
+Book.objects(db).order_by("author__name")
+Book.objects(db).select_related("author")                # JOIN instead of one query per row
+```
+
+Without `select_related()`, reading `book.author` for each book in a loop runs one query per book - use it
+(or `select_related("author__publisher")` for deeper chains) whenever you list rows and show their relations.
+
+`ForeignKey` options: `references` (the model class, or just a table name), `references_column` (defaults to the
+related model's primary key), `on_delete` / `on_update` (`CASCADE`, `SET NULL`, `RESTRICT`, `NO ACTION`,
+`SET DEFAULT`) and `related_name` (the reverse accessor, default `<model>_set`; `"+"` for none). Left at their
+defaults the generated constraint is unchanged, so adding the relation to an existing model creates no migration.
+
+**One-to-one.** `OneToOneField` is a `ForeignKey` whose column is declared `unique=True`; the reverse accessor
+returns the single related object (or `None`) instead of a queryset.
+
+**Many-to-many** goes through a join table that you declare as an ordinary model - so your migrations create
+it and it can carry extra columns:
+
+```python
+class BookTag(BaseModel):
+    table_name = "book_tags"
+    id = AutoField(); book_id = IntegerField(); tag_id = IntegerField()
+    unique_pair = UniqueTogether(columns=["book_id", "tag_id"])
+
+class Book(BaseModel):
+    ...
+    tags = ManyToManyField(Tag, through=BookTag, source_column="book_id",
+                           target_column="tag_id", related_name="books")
+```
+
+```python
+book.tags.add(python, web)          # idempotent; add(tag, note="x") fills extra join-table columns
+book.tags.remove(web); book.tags.set([python, orm]); book.tags.clear()
+book.tags.filter(name__startswith="p").count()           # book.tags is a QuerySet of Tag
+python.books                                             # the reverse side has the same API
+```
+
+Things to know:
+
+- Reverse accessors (`ada.books`) exist once the model holding the `ForeignKey` has been imported.
+- Lookups follow a relation **forwards** (`ForeignKey` / `OneToOneField`), not backwards or through many-to-many:
+  to find books with a tag, use `Book.objects(db).filter(pk__in=[b.id for b in tag.books])`.
+- `update()` and `delete()` can't be combined with a relation lookup - filter by key instead (`pk__in=[...]`).
+- There is no `prefetch_related()`; for a reverse relation over many rows, query the related model once with
+  `filter(author_id__in=[...])`.
+- The migrator never creates a many-to-many field's table - declare the join model.
+- `exclude(field=x)` is plain SQL negation, so rows where `field` is `NULL` are not returned; `exclude(Q(...))`
+  negates the whole group.
 
 ### Migrations
 
@@ -517,6 +665,366 @@ For production, serve `/uploads/` from nginx or a CDN - the built-in route reads
 
 ---
 
+## Public API access (CORS)
+
+Out of the box, a browser on another site can't call your pages from JavaScript - browsers enforce CORS and
+Plinth sends none. Switch on **public API access** and the whole site becomes callable from any origin you
+allow, with no CORS code in any app. Apps then only need to authenticate their own requests.
+
+```ini
+# .env
+PUBLIC_API_ENABLED=true
+```
+
+That is all it takes for "any site may call this one". It is **off by default**; with it off the server behaves
+exactly as before.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PUBLIC_API_ENABLED` | `false` | Master switch |
+| `PUBLIC_API_ALLOWED_ORIGINS` | `*` | `*` for any site, or a comma list such as `https://app.example.com,https://admin.example.com` |
+| `PUBLIC_API_ALLOWED_METHODS` | `GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS` | Methods browsers may use |
+| `PUBLIC_API_ALLOWED_HEADERS` | `*` | `*` allows whatever the browser asks for (including `Authorization`); or list them: `Authorization,Content-Type` |
+| `PUBLIC_API_EXPOSE_HEADERS` | | Response headers scripts may read, e.g. `X-Total-Count` |
+| `PUBLIC_API_MAX_AGE` | `86400` | Seconds a browser may cache a preflight answer |
+
+**How it works.** For "non-simple" requests (a JSON body, `PUT`/`DELETE`, an `Authorization` header) the browser first
+sends an `OPTIONS` *preflight*. `Server.py` answers it directly with `204` and the `Access-Control-Allow-*`
+headers - no database, session or routing involved, so it works for every URL. Every other response to a
+cross-origin request gets `Access-Control-Allow-Origin` too, **errors included**, so a front end can read its own
+`401` or `404`. When you list specific origins, an unlisted origin's preflight gets `403` and its responses get
+no CORS headers; a listed origin is echoed back with `Vary: Origin`. A controller can set its own
+`Access-Control-Allow-Origin` to override the policy for one route.
+
+**Authentication is the app's job.** The framework's own login uses a session cookie, and **cookies are never sent
+cross-origin** (Plinth never sends `Access-Control-Allow-Credentials`), so your admin session isn't exposed to other
+sites. A public API authenticates with a token instead:
+
+```python
+import hmac
+
+from core.controllers.ControllerBase import ControllerBase
+from core.http.routing.route import route
+
+
+class NoteApiController(ControllerBase):
+
+    @route("/api/notes", methods=["GET", "POST"])        # public as far as the framework is concerned
+    def notes(self, request):
+        expected = f"Bearer {self.env().get('NOTES_API_TOKEN', '')}"
+        supplied = request.headers.get("Authorization", "")
+        if not hmac.compare_digest(supplied, expected):      # the app decides who gets in
+            return self.json({"error": "unauthorized"}, status=401)
+        return self.json({"notes": []})
+```
+
+Be aware that with `PUBLIC_API_ENABLED=true` and `*`, any website's scripts can read every response that doesn't
+itself require authentication. Keep the switch off unless you mean that, or list the origins you trust.
+
+---
+
+## API authentication (the `apiauth` app)
+
+Plinth ships an optional app, `apiauth`, that gives a site every common way of authenticating API clients -
+**API keys, OAuth-style bearer tokens, JWTs, HTTP Basic and signed (HMAC) requests** - plus the routes and
+dashboard pages to create and manage the credentials. Register it and you're done; you don't write any of it
+yourself. Pair it with [Public API access (CORS)](#public-api-access-cors) to let other sites call your API.
+
+It is **not registered by default**. To switch it on:
+
+```python
+# app.py
+REGISTERED_APPS = ["admin", "blog", "apiauth"]
+```
+
+```bash
+python console.py apps:discover     # finds its routes, models, permissions and menus
+python console.py migration         # writes the migration for its two tables (api_keys, api_tokens)
+python console.py migrate
+python console.py apps:discover     # loads its permissions and role into the database
+```
+
+**What you get for free.** An API caller who authenticates becomes the request's `current_user` - exactly as if
+that person had signed in with a browser - so **every route you've already written, with its `permission=[...]`
+list, roles and menus, works for API clients unchanged**. A key can be limited to some of its owner's permissions
+(its *scopes* - permission keys), and can never do more than its owner can.
+
+### The ways to authenticate
+
+Choose which are accepted in `.env` with `API_AUTH_SCHEMES` (default `apikey,bearer`):
+
+| Scheme | Client sends | Good for |
+|---|---|---|
+| `apikey` | `X-API-Key: <key>` (or `Authorization: ApiKey <key>`) | Scripts, integrations, anything simple |
+| `bearer` | `Authorization: Bearer <token>` - an opaque token from the token endpoint | Apps where people sign in; revocable, expires |
+| `jwt` | `Authorization: Bearer <jwt>` - a signed JWT from the token endpoint | When clients or other services want to read the claims |
+| `basic` | `Authorization: Basic base64(<key_id>:<secret>)` | Tools that only speak HTTP Basic (`curl -u`) |
+| `hmac` | `Authorization: Signature keyId=..., timestamp=..., nonce=..., signature=...` | Server-to-server: the secret is never sent, requests can't be altered or replayed |
+
+`GET /api/auth/schemes` (public) tells a client which of these are on and how to use them, and
+`GET /api/auth/me` returns who you are, how you authenticated and what this credential may do - handy for testing.
+
+### Getting credentials
+
+**API keys** belong to a user who holds the `apiauth.keys.manage` permission (administrators do; the bundled
+role *API developer* has it). Create them on the dashboard under **API keys**, or over the API:
+
+```bash
+# sign in to get a token, then create a key with it
+curl -d grant_type=password -d username=ada@example.com -d password=... https://example.com/api/oauth/token
+curl -H "Authorization: Bearer plt_..." -H "Content-Type: application/json" \
+     -d '{"name": "nightly export", "scopes": ["notes.read"], "expires_in_days": 90}' https://example.com/api/keys
+# -> {"key": {...}, "secret": "pk_3f9c1a7b2d4e.Zx...", "signing_secret": "..."}   <- shown once, never again
+
+curl -H "X-API-Key: pk_3f9c1a7b2d4e.Zx..." https://example.com/api/notes          # use it
+curl -u pk_3f9c1a7b2d4e:Zx... https://example.com/api/notes                         # or as HTTP Basic
+```
+
+**Tokens** come from the token endpoint, which follows OAuth 2.0 (RFC 6749), so existing OAuth libraries work:
+
+| Grant | You send | You get |
+|---|---|---|
+| `password` | `username` (the account email), `password` | access token + refresh token, for a person's account |
+| `client_credentials` | `client_id` (the key id) + `client_secret` (the secret), or HTTP Basic | access token only, for a program using a key |
+| `refresh_token` | `refresh_token` | a new pair; the old refresh token is spent |
+
+```bash
+curl -d grant_type=password -d username=ada@example.com -d password=... -d scope="notes.read" https://example.com/api/oauth/token
+# -> {"access_token": "plt_...", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "plr_...", "scope": "notes.read"}
+
+curl -u pk_3f9c1a7b2d4e:Zx... -d grant_type=client_credentials https://example.com/api/oauth/token
+curl -d grant_type=refresh_token -d refresh_token=plr_... https://example.com/api/oauth/token
+curl -d token=plt_... https://example.com/api/oauth/revoke                              # sign out / revoke
+```
+
+Requests may be form-encoded or JSON. Set `API_AUTH_TOKEN_FORMAT=jwt` to issue JWTs instead of opaque tokens
+(needs `jwt` in `API_AUTH_SCHEMES` and an `API_AUTH_SECRET`).
+
+**Signed requests** prove possession of a secret without sending it. The key's creation response includes a
+`signing_secret`; the client signs each request:
+
+```python
+import hashlib, hmac, secrets, time, urllib.request
+
+def signed_request(key_id, signing_secret, method, path_and_query, body=b""):
+    timestamp, nonce = str(int(time.time())), secrets.token_hex(12)
+    canonical = "\n".join([method, path_and_query, timestamp, nonce, hashlib.sha256(body).hexdigest()])
+    signature = hmac.new(signing_secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    header = f'Signature keyId="{key_id}", timestamp="{timestamp}", nonce="{nonce}", signature="{signature}"'
+    request = urllib.request.Request("https://example.com" + path_and_query, data=body or None,
+                                     method=method, headers={"Authorization": header})
+    return urllib.request.urlopen(request)
+```
+
+The server rejects a wrong signature, a timestamp more than `API_AUTH_HMAC_TOLERANCE` seconds off, and a nonce
+it has already seen - so a captured request can't be altered or replayed. (`hmac` needs `API_AUTH_SECRET`.)
+
+### Using it from your own code
+
+Nothing special - protect routes the way you always do, and API callers are covered:
+
+```python
+@route("/api/notes", methods=["GET"], permission=["notes.read"])      # a browser session OR any API credential
+def notes(self, request):
+    user = self.require_auth(request)                                  # the person (or key owner) making the call
+    auth = getattr(request, "_auth", None)                             # how: auth.scheme, auth.credential, auth.scopes
+    return self.json({"notes": [...]})
+```
+
+A key with the scope `notes.read` can call that route; a key without it gets `403`; a bad or expired credential gets
+`401` with a `WWW-Authenticate` header before your code runs. Any authenticated caller can be asked who they are
+with `GET /api/auth/me`.
+
+### Everything the app provides
+
+| Route | Who | Purpose |
+|---|---|---|
+| `POST /api/oauth/token` | public | The token endpoint (grants above) |
+| `POST /api/oauth/revoke` | public | Revoke an access or refresh token (RFC 7009) |
+| `GET /api/auth/schemes` | public | Which schemes are on, and how to use them |
+| `GET /api/auth/me` | any authenticated caller | Who am I, how, with what scopes |
+| `POST /api/auth/logout` | token callers | Revoke the token this request used |
+| `GET` / `POST /api/keys` | `apiauth.keys.manage` | List / create your keys |
+| `DELETE /api/keys/<key_id>` | owner (or `apiauth.keys.admin`) | Revoke a key and the tokens it issued |
+| `POST /api/keys/<key_id>/rotate` | owner (or `apiauth.keys.admin`) | New secret for the same key; the old one dies immediately |
+| `GET /api/tokens`, `DELETE /api/tokens/<id>` | any authenticated caller | See and end your own signed-in sessions |
+| `/admin/api-keys` | `apiauth.keys.manage` | Dashboard: your keys, create / rotate / revoke |
+| `/admin/api-credentials` | `apiauth.keys.admin` | Dashboard: everyone's keys and active tokens |
+
+### Security model
+
+- **Secrets are never stored.** Keys and tokens are random 256-bit values; only SHA-256 hashes are kept, and the
+  plaintext is shown exactly once. Signing secrets are derived (HMAC of `API_AUTH_SECRET` and the key), not stored.
+- **Scopes only narrow.** A credential's permissions are the intersection of its owner's and its scopes, and you can
+  only grant scopes you hold yourself - a scoped key can't create a more powerful one.
+- **Refresh tokens rotate.** Using one spends it. If a spent refresh token is ever presented again (stolen, or a
+  replaying client), the whole login - every token descended from it - is revoked.
+- **Revocation is immediate:** revoking or rotating a key kills the tokens it issued; suspending an account stops
+  all of its credentials; JWTs are checked against the database by default (`API_AUTH_JWT_CHECK_REVOCATION=false`
+  makes them stateless, valid until they expire).
+- **Strict JWTs.** Only HS256 is accepted (never `none` or another algorithm); the signature is verified before the
+  payload is trusted; `exp` is required and `iss` is checked.
+- **Guessing is throttled.** Failed attempts are counted per client address + identity and answered with `429` and
+  `Retry-After` past `API_AUTH_MAX_FAILURES`. The password check takes about the same time whether or not the email exists.
+- **Not exposed to CSRF.** These credentials travel in headers, not cookies, so another site can't ride on them.
+
+Limits: the throttle and the nonce cache are **in memory, per process** - fine for the single-process server this
+framework ships with, but behind several processes also rate-limit at the proxy. The client address is the TCP peer,
+so behind a reverse proxy every request appears to come from the proxy. Send credentials only over HTTPS in
+production. `jwt` and `hmac` need `API_AUTH_SECRET`; the app reports a missing or short one instead of running
+without it (`/api/auth/schemes` lists `configuration_problems`).
+
+### Writing your own authenticator
+
+The app is built on a framework hook you can use too. An app lists authenticator classes in its `authenticators.py`:
+
+```python
+AUTHENTICATORS = ["public.apps.myapp.services.MyAuth.MyAuth"]
+```
+
+```python
+from core.services.RequestAuthService import AuthResult, AuthenticationFailed
+
+class MyAuth:
+    def __init__(self, db_connection): self.db = db_connection
+
+    def authenticate(self, request):
+        header = request.headers.get("X-My-Token")
+        if not header:
+            return None                                   # not my credentials - try the next authenticator / the session
+        user = ...                                        # look it up
+        if user is None:
+            raise AuthenticationFailed("invalid_token", "unknown token")      # -> 401
+        return AuthResult(user=user, scheme="mytoken", scopes=None)           # scopes: permission keys, or None
+```
+
+On every request `Server` asks each registered authenticator in turn; the first to return a result decides, and that user
+becomes `current_user` for the request.
+
+---
+
+## Fake data (development)
+
+Plinth can fill your database with realistic fake rows - users, posts, products, whatever your models describe -
+from the command line or from a page in the dashboard. It reads your models' fields (types, limits, choices,
+relationships) and your column names, so **it works on any model with no setup**; an app can teach it more.
+It uses [Faker](https://faker.readthedocs.io/), which is an optional dependency:
+
+```bash
+pip install Faker
+```
+
+### From the command line
+
+```bash
+python console.py fake:models                       # what can be faked, and how many rows each table has
+python console.py fake:generate User=20 Post=100    # create rows (Model or table name, optional =count)
+python console.py fake:generate Post --count 50 --seed 7 --locale fr_FR
+python console.py fake:generate Post --dry-run      # show sample rows, save nothing
+python console.py fake:runs                         # what earlier runs created
+python console.py fake:undo [run_id]                # delete exactly what a run created (default: the latest)
+```
+
+`fake:generate` shows the database it is about to write to and asks for confirmation (`--yes` skips it; without a
+terminal it refuses unless you pass `--yes`, so nothing is ever written unattended by accident).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--count N` | the model's default (10) | Rows for models named without `=count` |
+| `--locale xx_YY` | `en_US` | Language of the data - `fr_FR`, `de_DE`, `ja_JP` ... (any Faker locale) |
+| `--seed N` | random | The same seed gives the same data every time |
+| `--password P` | `password` | The password every fake user gets, so you can sign in as any of them |
+| `--null-ratio R` | `0.1` | How often a nullable column is left empty (0 to 1) |
+| `--no-related` | off | Don't create rows in related tables that are empty |
+| `--dry-run` | off | Preview only |
+| `--force` | off | `fake:undo`: allow it even if the run was made against a different database |
+
+### What it generates
+
+Each column gets a value that fits its field - a `DecimalField(6,2)` a price that fits six digits, a
+`CharField(max_length=5)` text of at most five characters, an `EnumField` one of its choices - and where the
+**name** suggests something, something fitting: `email` an email address, `title` a headline, `slug` a slug, `price`
+a price, `age` an age, `created_at` a date in the past, `phone`, `city`, `url`, `company` ... The auto-increment id,
+`updated_at`, `deleted_at` and auto UUIDs are left to the framework.
+
+- **Relations.** Foreign keys point at rows that exist. If the related table is empty, a few related rows are created
+  first (or pass `--no-related` to get an error that tells you what to generate first). Many-to-many relations get
+  up to three links. Models are generated parents-first, so `Post=10 User=3` works in either order.
+- **Uniqueness.** Unique columns and `UniqueTogether` constraints never collide - with each other or with rows already
+  in the table; a clashing row is simply regenerated. If a constraint is too tight for random data, you get a clear
+  message instead of an endless loop.
+- **Fake users really work.** They get a hashed password (the one from `--password`), a status mostly `active`, and
+  the default role - with its permissions collected automatically, exactly as for any new account.
+- **Undo.** Every run is recorded (in `storage/fakedata/runs.json`), including a run that failed half way, so
+  `fake:undo` removes exactly what was created - join-table rows and related rows included - and leaves everything else
+  alone. It refuses to delete by id from a different database than the one the run was made against.
+- **Real data is protected.** Models marked `fakeable = False` are never generated: sessions, password resets, tokens,
+  API keys, roles, permissions, stored files and media. Mark your own the same way:
+  `class Invoice(BaseModel): fakeable = False`.
+
+### Teaching it about your models
+
+When guessing isn't enough, an app adds a `factories.py` that overrides single columns:
+
+```python
+# public/apps/blog/factories.py
+from public.apps.blog.models.Post import Post
+
+FACTORIES = {
+    Post: {
+        "__count__": 20,                                                   # default rows when none is requested
+        "title": lambda fake: fake.sentence(nb_words=6).rstrip("."),       # a callable receives a Faker
+        "slug": lambda fake, ctx: slugify(ctx.row["title"]),               # ... or (Faker, ctx); ctx.row = columns so far
+        "status": "draft",                                                 # or just a constant
+        "__after__": lambda instance, fake, ctx: ...,                      # runs after each row is saved
+    },
+}
+```
+
+A callable may return `None` for NULL, or `SKIP` (from `core.fakedata.generators`) to leave the column alone.
+`ctx.index` is the row's position in the batch and `ctx.options` holds the run's settings. `python console.py
+apps:discover` checks these files, so a misspelt column name fails there rather than half way through a run.
+The bundled blog app has a working example.
+
+### In the dashboard
+
+The optional `fakedata` app gives the same thing a page with checkboxes - pick models and counts, choose a language,
+seed and password, **Preview** sample rows, **Generate**, and **Undo** earlier runs:
+
+```python
+# app.py
+REGISTERED_APPS = ["admin", "blog", "fakedata"]
+```
+
+```ini
+# .env - it writes junk into your database, so it is off unless you turn it on
+FAKE_DATA_ENABLED=true
+```
+
+Then run `python console.py apps:discover` and open **Fake data** in the sidebar's *Developer* group. It is
+administrators only even when enabled, limited to 1000 rows per model per request (use the command line for bigger
+loads), and shows which database it will write to before you generate. **Leave `FAKE_DATA_ENABLED` off anywhere that
+holds real data.**
+
+### From your own code
+
+```python
+from core.fakedata.service import FakeDataService
+from core.fakedata.generators import FakeOptions
+
+service = FakeDataService(db, FakeOptions(seed=42, locale="de_DE"))
+result = service.generate([(User, 20), (Post, 100)])    # a RunResult: run_id, created={"users": 20, ...}
+service.preview(Post, 3)                                # sample rows, nothing saved
+service.undo(result.run_id)                             # delete what that run created
+```
+
+Handy in tests and seed scripts. Notes: rows are inserted one at a time through the models (so model logic like
+password hashing runs), which is fast enough for thousands of rows but not millions; related rows are chosen from the
+first 500 existing rows of the related table; and there is no transaction, so a run that fails part way leaves what
+it created - recorded, and removable with `fake:undo`.
+
+---
+
 ## Configuration
 
 Settings live in `.env` (start from `env.example`).
@@ -534,6 +1042,10 @@ Settings live in `.env` (start from `env.example`).
 | `SESSION_COOKIE_NAME` | `session_id` | |
 | `PASSWORD_RESET_LIFETIME` | `3600` | Seconds |
 | `GOOGLE_*` `GITHUB_*` `MICROSOFT_*` | | `CLIENT_ID`, `CLIENT_SECRET`, `REDIRECT_URI` (plus `MICROSOFT_TENANT`) |
+| `PUBLIC_API_ENABLED` | `false` | Allow other sites to call this one from the browser - see [Public API access (CORS)](#public-api-access-cors) |
+| `PUBLIC_API_ALLOWED_ORIGINS` `_METHODS` `_HEADERS` `_EXPOSE_HEADERS` `_MAX_AGE` | `*` / all / `*` / none / `86400` | CORS policy details |
+| `API_AUTH_SCHEMES` `_SECRET` `_GRANTS` `_TOKEN_FORMAT` `_ACCESS_TTL` `_REFRESH_TTL` `_ISSUER` `_JWT_CHECK_REVOCATION` `_HMAC_TOLERANCE` `_BASIC_PASSWORDS` `_MAX_FAILURES` `_FAILURE_WINDOW` | `apikey,bearer` / none / all / `opaque` / `3600` / `2592000` / ... | The optional `apiauth` app - see [API authentication](#api-authentication-the-apiauth-app) |
+| `FAKE_DATA_ENABLED` | `false` | Allow the optional `fakedata` dashboard app to generate data - see [Fake data](#fake-data-development) |
 | `MEDIA_MAX_UPLOAD_MB` | `10` | Largest single upload |
 | `MEDIA_ALLOWED_EXTENSIONS` | all | Comma list that narrows the built-in types |
 | `STORAGE_PUBLIC_PATH` | `public/uploads` | Web-accessible disk, served at `/uploads/` |

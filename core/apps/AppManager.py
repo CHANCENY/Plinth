@@ -82,6 +82,33 @@ the expected folder layout):
                         it would be allowed. Items are cached with the routes; see
                         core/services/MenuService.py for how they're grouped and highlighted.
 
+    authenticators.py   optional. Lets an app identify API callers by their credentials (API keys, tokens ...).
+                        A list of dotted paths to classes with an `authenticate(request)` method:
+
+                            AUTHENTICATORS = ["public.apps.apiauth.services.ApiAuthenticator.ApiAuthenticator"]
+
+                        On every request Server asks each authenticator (apps in registration order) who is
+                        calling; the first to return a result decides, and that user becomes the request's
+                        `current_user` - so every route's `permission` list, roles and menus work unchanged for API
+                        clients. See core/services/RequestAuthService.py for the contract. The classes are imported
+                        here to validate them, so a typo fails discovery rather than the first request.
+
+    factories.py        optional. Teaches the fake-data tools (python console.py fake:generate, the fakedata
+                        dashboard app) how to build realistic rows for this app's models, where guessing from the
+                        field types isn't enough. A dict of model class -> column overrides:
+
+                            FACTORIES = {
+                                Post: {
+                                    "__count__": 20,                                   # default number of rows
+                                    "title": lambda fake: fake.sentence(nb_words=6),   # a callable gets a Faker (and
+                                    "slug": lambda fake, ctx: ...,                     # optionally a context with ctx.row)
+                                    "status": "draft",                                 # or a constant
+                                },
+                            }
+
+                        Every key must be a column of the model (misspelt ones fail here, not mid-run); see
+                        core/fakedata/service.py. Only a record of which apps have a factories.py is cached.
+
     views/              not scanned (nothing to discover - it's just a
                         directory convention). TemplateService resolves
                         "<app_name>:some/view" against public/apps/<app>/views/
@@ -141,6 +168,8 @@ class AppManager:
         permissions: List[Dict[str, Any]] = []
         roles: List[Dict[str, Any]] = []
         menus: List[Dict[str, Any]] = []
+        authenticators: List[Dict[str, str]] = []
+        factories: List[Dict[str, str]] = []
         errors: List[str] = []
 
         for app_name in app_names:
@@ -157,6 +186,12 @@ class AppManager:
             app_menus, menu_errors = self._discover_menus(app_name, app_dir)
             menus.extend(app_menus)
             errors.extend(menu_errors)
+            app_authenticators, authenticator_errors = self._discover_authenticators(app_name, app_dir)
+            authenticators.extend(app_authenticators)
+            errors.extend(authenticator_errors)
+            app_factories, factory_errors = self._discover_factories(app_name, app_dir)
+            factories.extend(app_factories)
+            errors.extend(factory_errors)
 
         # a role may grant permissions declared by any registered app, so this can only be checked once all are loaded
         known_permissions = {p["key"] for p in permissions}
@@ -189,6 +224,8 @@ class AppManager:
             "permissions": permissions,
             "roles": roles,
             "menus": menus,
+            "authenticators": authenticators,
+            "factories": factories,
             "warnings": warnings,
         }
         self._write_cache(result)
@@ -347,6 +384,78 @@ class AppManager:
             )
         return permissions, roles, errors
 
+    def _discover_authenticators(self, app_name: str, app_dir: Path):
+        """Reads public/apps/<app>/authenticators.py (AUTHENTICATORS = ["module.path.ClassName", ...]) and checks
+        each class can be imported and has an authenticate() method. Returns (authenticators, errors)."""
+        if not (app_dir / "authenticators.py").is_file():
+            return [], []
+
+        module_path = f"public.apps.{app_name}.authenticators"
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as exc:
+            raise ImportError(f"AppManager: couldn't load authenticators for app '{app_name}' ({module_path}): {exc}") from exc
+
+        where = f"app '{app_name}' authenticators.py"
+        raw = getattr(module, "AUTHENTICATORS", [])
+        if not isinstance(raw, (list, tuple)):
+            return [], [f"{where}: AUTHENTICATORS must be a list of dotted class paths"]
+
+        found, errors = [], []
+        for dotted in raw:
+            if not isinstance(dotted, str) or "." not in dotted:
+                errors.append(f"{where}: {dotted!r} must be a dotted path to a class, e.g. 'public.apps.{app_name}.services.MyAuth.MyAuth'")
+                continue
+            module_name, _, class_name = dotted.rpartition(".")
+            try:
+                cls = getattr(importlib.import_module(module_name), class_name)
+            except (ImportError, AttributeError) as exc:
+                errors.append(f"{where}: couldn't import '{dotted}' ({exc})")
+                continue
+            if not callable(getattr(cls, "authenticate", None)):
+                errors.append(f"{where}: '{dotted}' has no authenticate(request) method")
+                continue
+            found.append({"app": app_name, "class": dotted})
+        return found, errors
+
+    def _discover_factories(self, app_name: str, app_dir: Path):
+        """Reads public/apps/<app>/factories.py (FACTORIES = {Model: {"column": value_or_callable, ...}}) and checks
+        every key is a column of its model. Returns ([{"app", "module"}], errors)."""
+        if not (app_dir / "factories.py").is_file():
+            return [], []
+
+        module_path = f"public.apps.{app_name}.factories"
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as exc:
+            raise ImportError(f"AppManager: couldn't load factories for app '{app_name}' ({module_path}): {exc}") from exc
+
+        from core.models.BaseModel import BaseModel
+
+        where = f"app '{app_name}' factories.py"
+        raw = getattr(module, "FACTORIES", {})
+        if not isinstance(raw, dict):
+            return [], [f"{where}: FACTORIES must be a dict of model class -> overrides"]
+
+        errors: List[str] = []
+        for model, overrides in raw.items():
+            if not (isinstance(model, type) and issubclass(model, BaseModel)):
+                errors.append(f"{where}: key {model!r} must be a model class")
+                continue
+            if not isinstance(overrides, dict):
+                errors.append(f"{where}: the overrides for {model.__name__} must be a dict")
+                continue
+            for key, value in overrides.items():
+                if key == "__count__":
+                    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                        errors.append(f"{where}: {model.__name__} '__count__' must be a whole number of at least 1")
+                elif key == "__after__":
+                    if not callable(value):
+                        errors.append(f"{where}: {model.__name__} '__after__' must be callable (instance, fake, ctx)")
+                elif key not in model._column_names:
+                    errors.append(f"{where}: {model.__name__} has no column '{key}' (columns: {', '.join(model._column_names)})")
+        return ([{"app": app_name, "module": module_path}] if not errors else []), errors
+
     MENU_FIELDS = {"key", "label", "path", "group", "permission", "weight", "exact"}
 
     def _discover_menus(self, app_name: str, app_dir: Path):
@@ -424,7 +533,7 @@ class AppManager:
         self.cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def load_cache(self) -> Optional[Dict[str, Any]]:
-        """Returns the last-discovered {"app_names", "routes", "models", "permissions", "roles", "menus", "warnings"}, or None if
+        """Returns the last-discovered {"app_names", "routes", "models", "permissions", "roles", "menus", "authenticators", "factories", "warnings"}, or None if
         `python console.py apps:discover` has never been run (or found nothing registered)."""
         if not self.cache_path.exists():
             return None

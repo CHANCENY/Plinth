@@ -138,7 +138,7 @@ class Migrator:
 
     @staticmethod
     def _current_fields(model: Type[BaseModel]) -> Dict[str, str]:
-        return {field.migration_key(): field.to_sql() for field in model._fields.values()}
+        return {field.migration_key(): field.to_sql() for field in model._fields.values() if not field.is_virtual}
 
     @staticmethod
     def _create_table_sql(model: Type[BaseModel]) -> str:

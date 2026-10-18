@@ -45,6 +45,13 @@ class BaseModel:
 
     SCHEMA: List[str] = []  # auto-filled from declared Fields below, unless a subclass writes its own
     _fields: Dict[str, Field] = {}  # name -> Field, declaration order, filled in by __init_subclass__
+    _column_names: List[str] = []  # the real columns (no constraints, no many-to-many), declaration order
+    fakeable: bool = True  # False hides the model from fake-data generation (core/fakedata) - for tables that must hold real data only
+
+    # table name -> model class, for every model defined so far. Lets a ForeignKey given just a table name find
+    # its model, and lets reverse accessors (user.files) be installed whichever of the two models loads first.
+    _registry: Dict[str, type] = {}
+    _pending_relations: Dict[str, list] = {}  # table name -> [(owner model, relation field)] waiting for that table's model
 
     def __init_subclass__(cls, **kwargs):
         """
@@ -61,20 +68,34 @@ class BaseModel:
             if isinstance(value, Field):
                 value.name = name
                 fields[name] = value
+        if cls.table_name:
+            BaseModel._registry[cls.table_name] = cls
         if not fields:
             return
         cls._fields = fields
 
-        columns = [f.to_sql() for f in fields.values() if not f.is_constraint]
-        constraints = [f.to_sql() for f in fields.values() if f.is_constraint]
+        # virtual fields (many-to-many) have no column and no DDL - they never reach the schema
+        real = [f for f in fields.values() if not f.is_virtual]
+        columns = [f.to_sql() for f in real if not f.is_constraint]
+        constraints = [f.to_sql() for f in real if f.is_constraint]
         cls.SCHEMA = columns + constraints
+        cls._column_names = [name for name, f in fields.items() if not f.is_constraint and not f.is_virtual]
 
         primary_keys = [name for name, f in fields.items() if f.primary_key]
         if primary_keys:
             cls.primary_key = primary_keys[0]
 
         if "fillable" not in vars(cls):  # only auto-derive if this model didn't set its own fillable
-            cls.fillable = [name for name, f in fields.items() if not f.is_constraint and not f.primary_key]
+            cls.fillable = [name for name, f in fields.items() if not f.is_constraint and not f.is_virtual and not f.primary_key]
+
+        # now that the class is complete: let relationship fields validate themselves and install their
+        # reverse accessors, and finish any relations other models declared towards this table earlier
+        from core.models.relations import resolve_pending
+
+        for field in fields.values():
+            field.contribute_to_class(cls)
+        if cls.table_name:
+            resolve_pending(cls)
 
     @classmethod
     def create_table(cls, db_connection, if_not_exists: bool = False):
@@ -105,7 +126,26 @@ class BaseModel:
             raise AttributeError(f"{type(self).__name__} has no attribute '{name}'")
 
     def __getitem__(self, key):
+        if key not in self.attributes and key in self.__dict__.get("_deferred", ()):
+            self._load_deferred(key)
         return self.attributes[key]
+
+    def _load_deferred(self, name: str) -> None:
+        """Fetches one column that .only()/.defer() left out, the first time it's read."""
+        deferred = self.__dict__.get("_deferred")
+        if not deferred or name not in deferred:
+            return
+        pk = self.attributes.get(self.primary_key)
+        value = None
+        if pk is not None:
+            row = self.db.connect().table(self.table_name).select(name).where(self.primary_key, "=", pk).first()
+            if row is not None:
+                value = dict(row)[name]
+                field = self._fields.get(name)
+                if value is not None and field is not None:
+                    value = field.to_python(value)
+        self.attributes[name] = value
+        deferred.discard(name)
 
     def __setitem__(self, key, value):
         self.attributes[key] = value
@@ -118,7 +158,10 @@ class BaseModel:
 
     def fill(self, data: Dict[str, Any]) -> "BaseModel":
         for key, value in data.items():
-            if key in self.fillable or key == self.primary_key:
+            field = self._fields.get(key)
+            if field is not None and field.is_relation and not field.is_virtual:
+                setattr(self, key, value)  # Media(db, owner=user): a relation name sets its key column
+            elif key in self.fillable or key == self.primary_key:
                 self.attributes[key] = value
         return self
 
@@ -154,11 +197,20 @@ class BaseModel:
         return db_connection.connect().table(cls.table_name).where(column, operator, value)
 
     @classmethod
-    def _from_row(cls, db_connection, row) -> "BaseModel":
+    def _from_row(cls, db_connection, row, deferred=None) -> "BaseModel":
+        """A persisted instance from a database row. Each declared field converts its value to the Python
+        type (Decimal, UUID, date, dict, bytes ...). `deferred` names columns not loaded (see QuerySet.only())."""
         instance = cls.__new__(cls)
         instance.db = db_connection
-        instance.attributes = dict(row)
+        attributes = dict(row)
+        for name, value in attributes.items():
+            field = cls._fields.get(name)
+            if value is not None and field is not None and not field.is_constraint and not field.is_virtual:
+                attributes[name] = field.to_python(value)
+        instance.attributes = attributes
         instance._persisted = True
+        if deferred:
+            instance._deferred = set(deferred)
         return instance
 
     # ------------------------------------------------------------------ #
@@ -185,6 +237,11 @@ class BaseModel:
             self.attributes.setdefault("created_at", now)
             self.attributes["updated_at"] = now
 
+        if not self._persisted:
+            for name, field in self._fields.items():
+                if field.auto_default and self.attributes.get(name) is None:
+                    self.attributes[name] = field.generate_default()  # e.g. UUIDField(auto=True)
+
         data = {k: v for k, v in self.attributes.items() if k in self.fillable}
         pk_value = self.attributes.get(self.primary_key)
 
@@ -210,4 +267,6 @@ class BaseModel:
         row = self._this_row("refresh").first()
         if row is not None:
             self.attributes = dict(row.attributes)
+            self.__dict__.pop("_deferred", None)
+            self.__dict__.pop("_relation_cache", None)
         return self

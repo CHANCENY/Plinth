@@ -105,10 +105,24 @@ class User(BaseModel):
             items = ["*"]
         return json.dumps(items)
 
+    def restrict_permissions(self, scopes) -> "User":
+        """
+        Narrows this instance's permissions to `scopes` (permission keys) for as long as the object lives -
+        used when someone authenticates with an API key or token that was limited to certain scopes
+        (core/services/RequestAuthService.py). The result is the intersection of what the user can do and what
+        the credential allows; an administrator ("*") with scopes gets exactly those scopes. None - or a
+        scope of "*" - means no restriction. It is never written to the database: permissions_raw is untouched.
+        """
+        self.__dict__["_scope_limit"] = None if scopes is None else set(scopes)
+        return self
+
     @property
     def permissions(self):
         """"*" (all permissions) or a list of permission strings, e.g. ["admin.users.manage"]."""
         items = self.parse_permissions(self.attributes.get("permissions_raw"))
+        limit = self.__dict__.get("_scope_limit")
+        if limit is not None and "*" not in limit:
+            items = sorted(limit) if "*" in items else [p for p in items if p in limit]
         return "*" if "*" in items else items
 
     @permissions.setter
