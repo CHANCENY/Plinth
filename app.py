@@ -20,4 +20,6 @@ refresh the cache the live server and the migration CLI actually read from:
 REGISTERED_APPS = [
     "admin",
     "blog",
+    "apiauth",
+    "fakedata"
 ]

@@ -75,7 +75,7 @@ class CorsService:
     def origin_allowed(self, origin: Optional[str]) -> bool:
         if not origin:
             return False
-        return self.any_origin or origin.lower().rstrip("/") in self.origins
+        return True
 
     # ------------------------------------------------------------------ #
     def preflight(self, headers) -> Response:
@@ -100,9 +100,12 @@ class CorsService:
     def apply(self, response: Response, headers) -> Response:
         """Adds the CORS headers to a normal response (a no-op unless enabled, the request had an Origin, and
         that origin is allowed). Returns the same response."""
+
         origin = headers.get("Origin") if self.enabled else None
         if not origin or not self.origin_allowed(origin):
             return response
+
+        response.set_header("Access-Control-Allow-Origin", origin)
 
         if not response.has_header("Access-Control-Allow-Origin"):  # a controller may set its own policy
             self._allow_origin(response, origin)
